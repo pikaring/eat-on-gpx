@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Eat on GPX</title>
+<link rel="icon" href="../assets/favicon.ico">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{
+  --bg:#f3f4f6; --panel:#fff; --ink:#1f2933; --muted:#6b7280; --line:#e5e7eb;
+  --navy:#14213d; --accent:#1a73e8; --amber:#fca311;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  display:flex;flex-direction:column;height:100dvh;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif;
+  color:var(--ink);background:var(--bg);font-size:14px;
+}
+header{
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  background:var(--navy);color:#fff;flex-wrap:wrap;
+}
+h1{font-size:16px;margin:0;flex:1;white-space:nowrap}
+.btn{
+  display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border-radius:6px;
+  border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;
+  font-size:13px;cursor:pointer;white-space:nowrap;
+}
+.btn:hover{background:rgba(255,255,255,.1)}
+.btn:disabled{opacity:.4;cursor:default}
+.btn.primary{background:var(--amber);border-color:var(--amber);color:#111;font-weight:700}
+main{flex:1;display:flex;min-height:0}
+#map{flex:1;min-height:0;background:#dfe6ee}
+#panel{
+  width:380px;display:flex;flex-direction:column;background:var(--panel);
+  border-left:1px solid var(--line);min-height:0;
+}
+#status{padding:8px 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line);line-height:1.5}
+#status.err{color:#b91c1c;background:#fef2f2}
+#progress{height:3px;background:var(--line)}
+#progressBar{height:100%;width:0;background:var(--accent);transition:width .2s}
+#chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
+#chips:empty{display:none}
+.chip{
+  display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;
+  border:1px solid var(--c);background:var(--c);color:#fff;font-size:12px;cursor:pointer;user-select:none;
+}
+.chip.off{background:transparent;color:var(--c)}
+.chip b{font-weight:700}
+#list{list-style:none;margin:0;padding:0;overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch}
+#list li{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+#list li:hover{background:#f8fafc}
+#list li.active{background:#eef4ff}
+#list li .km{flex:0 0 52px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700;font-size:13px}
+#list li .km small{font-weight:400;color:var(--muted);font-size:10px}
+#list li .body{flex:1;min-width:0}
+#list li .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#list li .meta{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#list li .dot{width:10px;height:10px;border-radius:50%;background:var(--c);flex:0 0 10px}
+#list li.wpt{background:#fff8e6;border-left:4px solid var(--amber)}
+#list li.wpt .name{color:#7a4b00}
+#list li a.ext{flex:0 0 auto;font-size:11px;color:var(--accent);text-decoration:none;padding:4px 6px;border:1px solid #c7dbfa;border-radius:6px}
+#list li a.ext:hover{background:#eef4ff}
+#empty{padding:24px 16px;color:var(--muted);font-size:13px;line-height:1.7}
+
+/* マーカー（Leaflet／Google 共通のDOM） */
+.mk{
+  position:absolute;left:0;top:0;transform:translate(-50%,-50%);
+  width:26px;height:26px;border-radius:50%;background:var(--c);
+  display:flex;align-items:center;justify-content:center;font-size:14px;line-height:1;
+  border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45);cursor:pointer;
+}
+.mk.wp{
+  width:auto;height:auto;border-radius:6px;padding:3px 7px;transform:translate(-50%,-115%);
+  background:var(--navy);color:#fff;font-size:12px;font-weight:700;white-space:nowrap;
+}
+.mk.wp::after{
+  content:"";position:absolute;left:50%;bottom:-7px;margin-left:-5px;
+  border:5px solid transparent;border-top-color:var(--navy);border-bottom:0;
+}
+.leaflet-div-icon{background:none;border:0}
+.pop{font-size:13px;line-height:1.6;max-width:260px}
+.pop .t{font-weight:700;font-size:14px;margin-bottom:2px}
+.pop .m{color:var(--muted);font-size:12px}
+.pop a{color:var(--accent)}
+.leaflet-popup-content{margin:10px 14px}
+
+/* 設定ダイアログ */
+dialog{border:0;border-radius:12px;padding:0;max-width:min(92vw,460px);width:100%;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+dialog::backdrop{background:rgba(0,0,0,.4)}
+dialog form{padding:18px 20px;display:flex;flex-direction:column;gap:14px}
+dialog h2{margin:0;font-size:16px}
+dialog label.f{display:flex;flex-direction:column;gap:4px;font-size:13px}
+dialog input[type=text],dialog select{padding:7px 9px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;font-family:inherit}
+dialog .hint{font-size:11px;color:var(--muted);line-height:1.5}
+dialog .hint a{color:var(--accent)}
+dialog .row{display:flex;flex-wrap:wrap;gap:10px;font-size:13px}
+dialog .row label{display:flex;align-items:center;gap:4px}
+dialog .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+dialog .foot button{padding:7px 16px;border-radius:6px;border:1px solid #cbd5e1;background:#fff;cursor:pointer;font-size:13px}
+dialog .foot button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+fieldset{border:1px solid var(--line);border-radius:8px;padding:8px 12px 10px;margin:0}
+legend{font-size:12px;color:var(--muted);padding:0 4px}
+
+body.drag::after{
+  content:"GPXファイルをここにドロップ";position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  background:rgba(20,33,61,.7);color:#fff;font-size:22px;font-weight:700;z-index:9999;pointer-events:none;
+}
+@media (max-width:760px){
+  main{flex-direction:column}
+  #map{flex:0 0 46%}
+  #panel{width:auto;flex:1;border-left:0;border-top:1px solid var(--line)}
+  h1{font-size:15px}
+  .btn{padding:6px 9px;font-size:12px}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="../" title="紹介ページへ" style="color:inherit;text-decoration:none">🍙 Eat on GPX</a></h1>
+  <label class="btn primary">📂 GPXを開く<input type="file" id="gpxFile" accept=".gpx,application/gpx+xml" hidden></label>
+  <button id="btnSearch" class="btn" disabled>🔍 再検索</button>
+  <button id="btnExport" class="btn" disabled>⬇ GPX書き出し</button>
+  <button id="btnSettings" class="btn">⚙ 設定</button>
+</header>
+<main>
+  <div id="map"></div>
+  <aside id="panel">
+    <div id="status">GPXファイルをドロップするか、「GPXを開く」から読み込んでください。</div>
+    <div id="progress"><div id="progressBar"></div></div>
+    <div id="chips"></div>
+    <ol id="list"><li id="empty">ルートを読み込むと、道沿いのコンビニ・レストランなどを距離順に表示します。<br>
+      各スポットの「地図↗」でGoogleマップが開きます。<br><br>
+      <a href="?gpx=samples/demo.gpx">▶ サンプルのGPX（札幌→苫小牧 74km）で試す</a></li></ol>
+  </aside>
+</main>
+
+<dialog id="dlg">
+  <form method="dialog" id="settingsForm">
+    <h2>⚙ 設定</h2>
+    <label class="f">Google Maps APIキー
+      <input type="text" id="sKey" autocomplete="off" spellcheck="false" placeholder="AIza…（空欄なら OpenStreetMap の地図で表示）">
+      <span class="hint">「Maps JavaScript API」と「Places API (New)」を有効にしたキーを入れてください。
+        キーはこのブラウザの localStorage にだけ保存され、Google 以外には送信しません。
+        <a href="https://console.cloud.google.com/google/maps-apis/credentials" target="_blank" rel="noopener">Cloud Console ↗</a></span>
+    </label>
+    <label class="f">Map ID（任意）
+      <input type="text" id="sMapId" placeholder="DEMO_MAP_ID">
+      <span class="hint">未入力なら DEMO_MAP_ID を使います（動作しますが、本番用には自分の Map ID を推奨）。</span>
+    </label>
+    <fieldset><legend>スポットの取得元</legend>
+      <div class="row">
+        <label><input type="radio" name="src" value="google"> Google Places（APIキー必要・情報が新しい）</label>
+        <label><input type="radio" name="src" value="osm"> OpenStreetMap（無料・キー不要）</label>
+      </div>
+    </fieldset>
+    <label class="f">ルートからの距離（この範囲内のスポットだけ表示）
+      <select id="sCorridor">
+        <option value="100">100 m</option><option value="200">200 m</option><option value="300">300 m</option>
+        <option value="500">500 m</option><option value="1000">1 km</option>
+      </select>
+      <span class="hint">Google Places の場合、200 km のルートで 300 m なら約 250 回の検索になります（無料枠は月 5,000 回程度）。</span>
+    </label>
+    <fieldset><legend>表示する種類</legend><div class="row" id="sCats"></div></fieldset>
+    <div class="foot">
+      <button type="button" id="btnCancel">キャンセル</button>
+      <button type="submit" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+/* ========== 定数・設定 ========== */
+const CATS = {
+  conbini:   {label:'コンビニ',       emoji:'🏪', color:'#e53935', g:['convenience_store'],              osm:{shop:['convenience']},       on:true},
+  restaurant:{label:'レストラン・食堂', emoji:'🍚', color:'#fb8c00', g:['restaurant'],                     osm:{amenity:['restaurant']},     on:true},
+  fastfood:  {label:'ファストフード',   emoji:'🍔', color:'#8e24aa', g:['fast_food_restaurant','meal_takeaway'], osm:{amenity:['fast_food']}, on:true},
+  cafe:      {label:'カフェ',         emoji:'☕', color:'#6d4c41', g:['cafe','coffee_shop'],             osm:{amenity:['cafe']},           on:true},
+  super:     {label:'スーパー・ドラッグストア', emoji:'🛒', color:'#43a047', g:['supermarket','drugstore'], osm:{shop:['supermarket','chemist']}, on:false},
+};
+const CAT_ORDER = ['conbini','fastfood','cafe','restaurant','super']; // 判定の優先順
+const LS_KEY = 'eatOnGpx:settings';
+const CACHE_TTL = 7*24*3600*1000;
+
+const settings = loadSettings();
+function loadSettings(){
+  const d = {key:'', mapId:'', source:'', corridor:300, cats:Object.fromEntries(Object.entries(CATS).map(([k,v])=>[k,v.on]))};
+  try{ Object.assign(d, JSON.parse(localStorage.getItem(LS_KEY)||'{}')); }catch(e){}
+  return d;
+}
+function saveSettings(){ localStorage.setItem(LS_KEY, JSON.stringify(settings)); }
+const effectiveSource = () => settings.source || (settings.key ? 'google' : 'osm');
+
+/* ========== DOM ========== */
+const $ = s => document.querySelector(s);
+const elStatus=$('#status'), elBar=$('#progressBar'), elChips=$('#chips'), elList=$('#list');
+const btnSearch=$('#btnSearch'), btnExport=$('#btnExport');
+
+function setStatus(msg, err){ elStatus.textContent = msg; elStatus.classList.toggle('err', !!err); }
+function setProgress(done,total){ elBar.style.width = total ? (100*done/total)+'%' : '0'; }
+
+/* ========== 地図アダプタ（Leaflet / Google） ========== */
+function watchSize(el, fn){
+  if('ResizeObserver' in window) new ResizeObserver(()=>fn()).observe(el);
+  window.addEventListener('resize', fn);
+}
+function markerDom(cls, html, color){
+  const wrap = document.createElement('div');            // 0×0 の基準点
+  wrap.style.cssText = 'position:relative;width:0;height:0';
+  const m = document.createElement('div');
+  m.className = 'mk '+cls; m.innerHTML = html; m.style.setProperty('--c', color);
+  wrap.appendChild(m);
+  return wrap;
+}
+
+class LeafletMap {
+  constructor(el){
+    this.map = L.map(el, {zoomControl:true}).setView([40.6,140.8], 8);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(this.map);
+    watchSize(el, ()=>{ this.map.invalidateSize(); if(this.needFit) this.fit(); });
+  }
+  drawRoute(pts){
+    if(this.route) this.route.remove();
+    this.route = L.polyline(pts.map(p=>[p.lat,p.lon]),{color:'#1a73e8',weight:4,opacity:.85}).addTo(this.map);
+    this.needFit=true; this.fit();
+  }
+  fit(){
+    const sz=this.map.getSize(); if(!sz.x||!sz.y) return;   // 非表示中（サイズ0）だと fitBounds が狂うので表示後に再実行
+    this.map.fitBounds(this.route.getBounds(),{padding:[24,24]}); this.needFit=false;
+  }
+  addMarker({lat,lon,cls,html,color,title,popup,z}){
+    const icon = L.divIcon({className:'', iconSize:[0,0], html: markerDom(cls,html,color).outerHTML});
+    const m = L.marker([lat,lon],{icon,title,zIndexOffset:z||0}).addTo(this.map);
+    if(popup) m.bindPopup(popup);
+    const map = this.map;
+    return {
+      show(){ if(!map.hasLayer(m)) m.addTo(map); }, hide(){ m.remove(); }, remove(){ m.remove(); },
+      open(){ if(!map.hasLayer(m)) m.addTo(map); map.setView([lat,lon], Math.max(map.getZoom(),15)); m.openPopup(); },
+    };
+  }
+}
+
+class GoogleMap {
+  constructor(el, mapId, lib){
+    this.lib = lib;
+    this.map = new lib.Map(el,{center:{lat:40.6,lng:140.8},zoom:8,mapId,mapTypeControl:false,streetViewControl:false,fullscreenControl:false,gestureHandling:'greedy'});
+    this.info = new lib.InfoWindow();
+    watchSize(el, ()=>{ if(this.needFit) this.fit(); });
+  }
+  drawRoute(pts){
+    if(this.route) this.route.setMap(null);
+    const path = pts.map(p=>({lat:p.lat,lng:p.lon}));
+    this.route = new google.maps.Polyline({path,strokeColor:'#1a73e8',strokeWeight:4,strokeOpacity:.85,map:this.map});
+    this.bounds = new google.maps.LatLngBounds(); path.forEach(p=>this.bounds.extend(p));
+    this.needFit=true; this.fit();
+  }
+  fit(){
+    const el=this.map.getDiv(); if(!el.clientWidth||!el.clientHeight) return;
+    this.map.fitBounds(this.bounds, 24); this.needFit=false;
+  }
+  addMarker({lat,lon,cls,html,color,title,popup,z}){
+    const m = new this.lib.AdvancedMarkerElement({map:this.map,position:{lat,lng:lon},content:markerDom(cls,html,color),title,zIndex:z||0});
+    const self=this;
+    const open = ()=>{ if(!popup) return; self.info.setContent(popup); self.info.open({anchor:m,map:self.map}); };
+    if(popup) m.addListener('click', open);
+    return {
+      show(){ m.map = self.map; }, hide(){ m.map = null; }, remove(){ m.map = null; },
+      open(){ m.map = self.map; self.map.panTo({lat,lng:lon}); if(self.map.getZoom()<15) self.map.setZoom(15); open(); },
+    };
+  }
+}
+
+function loadGoogleScript(key){
+  // Google 公式のブートストラップローダー
+  (g=>{var h,a,k,p="The Google Maps JavaScript API",c="google",l="importLibrary",q="__ib__",m=document,b=window;b=b[c]||(b[c]={});var d=b.maps||(b.maps={}),r=new Set,e=new URLSearchParams,u=()=>h||(h=new Promise(async(f,n)=>{await (a=m.createElement("script"));e.set("libraries",[...r]+"");for(k in g)e.set(k.replace(/[A-Z]/g,t=>"_"+t[0].toLowerCase()),g[k]);e.set("callback",c+".maps."+q);a.src=`https://maps.${c}apis.com/maps/api/js?`+e;d[q]=f;a.onerror=()=>h=n(Error(p+" could not load."));a.nonce=m.querySelector("script[nonce]")?.nonce||"";m.head.append(a)}));d[l]?console.warn(p+" only loads once. Ignoring:",g):d[l]=(f,...n)=>r.add(f)&&u().then(()=>d[l](f,...n))})({key, v:'weekly', language:'ja', region:'JP'});
+}
+window.gm_authFailure = () => setStatus('Google Maps APIキーが無効か、Maps JavaScript API が有効になっていません。設定を確認してください。', true);
+
+let mapApi = null, engine = 'leaflet';
+async function initMap(){
+  const el = $('#map');
+  if(settings.key){
+    try{
+      loadGoogleScript(settings.key);
+      const [{Map, InfoWindow}, {AdvancedMarkerElement}] = await Promise.all([google.maps.importLibrary('maps'), google.maps.importLibrary('marker')]);
+      mapApi = new GoogleMap(el, settings.mapId || 'DEMO_MAP_ID', {Map, InfoWindow, AdvancedMarkerElement});
+      engine = 'google';
+      return;
+    }catch(e){
+      console.error(e);
+      setStatus('Google Maps を読み込めなかったため OpenStreetMap の地図で表示します：'+e.message, true);
+    }
+  }
+  mapApi = new LeafletMap(el); engine = 'leaflet';
+}
+
+/* ========== 幾何計算 ========== */
+function makeProj(lat0){
+  const R=6371000, d=Math.PI/180, k=Math.cos(lat0*d);
+  return (lat,lon)=>({x:lon*d*R*k, y:lat*d*R});
+}
+function prepTrack(pts){
+  const proj = makeProj(pts[0].lat);
+  const xy = pts.map(p=>proj(p.lat,p.lon));
+  const cum = new Float64Array(pts.length);
+  for(let i=1;i<pts.length;i++) cum[i] = cum[i-1] + Math.hypot(xy[i].x-xy[i-1].x, xy[i].y-xy[i-1].y);
+  return {pts, xy, cum, proj, length:cum[pts.length-1]};
+}
+// Douglas-Peucker（インデックス列を返す）
+function simplify(xy, tol){
+  const keep = new Uint8Array(xy.length); keep[0]=keep[xy.length-1]=1;
+  const stack=[[0,xy.length-1]]; const t2=tol*tol;
+  while(stack.length){
+    const [a,b]=stack.pop(); if(b-a<2) continue;
+    const ax=xy[a].x, ay=xy[a].y, dx=xy[b].x-ax, dy=xy[b].y-ay, L2=dx*dx+dy*dy;
+    let best=-1, bi=-1;
+    for(let i=a+1;i<b;i++){
+      const px=xy[i].x-ax, py=xy[i].y-ay;
+      let d2;
+      if(L2===0) d2=px*px+py*py;
+      else{ const t=Math.max(0,Math.min(1,(px*dx+py*dy)/L2)); const ex=px-t*dx, ey=py-t*dy; d2=ex*ex+ey*ey; }
+      if(d2>best){best=d2;bi=i;}
+    }
+    if(best>t2){ keep[bi]=1; stack.push([a,bi],[bi,b]); }
+  }
+  const out=[]; for(let i=0;i<xy.length;i++) if(keep[i]) out.push(i);
+  return out;
+}
+// 点から簡略化トラックへの最短距離と、その位置のルート距離
+function nearestOnTrack(track, simp, x, y){
+  const {xy,cum}=track; let best=Infinity, km=0;
+  for(let s=0;s<simp.length-1;s++){
+    const i=simp[s], j=simp[s+1];
+    const ax=xy[i].x, ay=xy[i].y, dx=xy[j].x-ax, dy=xy[j].y-ay, L2=dx*dx+dy*dy;
+    const px=x-ax, py=y-ay;
+    const t = L2 ? Math.max(0,Math.min(1,(px*dx+py*dy)/L2)) : 0;
+    const ex=px-t*dx, ey=py-t*dy, d2=ex*ex+ey*ey;
+    if(d2<best){ best=d2; km=cum[i]+t*(cum[j]-cum[i]); }
+  }
+  return {dist:Math.sqrt(best), km};
+}
+// 等間隔サンプル点
+function sampleTrack(track, interval){
+  const {pts,cum}=track, out=[]; let next=0;
+  for(let i=0;i<pts.length-1;i++){
+    while(next<=cum[i+1]){
+      const seg=cum[i+1]-cum[i]; const t=seg? (next-cum[i])/seg : 0;
+      out.push({lat:pts[i].lat+(pts[i+1].lat-pts[i].lat)*t, lon:pts[i].lon+(pts[i+1].lon-pts[i].lon)*t});
+      next+=interval;
+    }
+  }
+  const last=pts[pts.length-1]; out.push({lat:last.lat,lon:last.lon});
+  return out;
+}
+
+/* ========== GPX ========== */
+function parseGpx(text){
+  const doc = new DOMParser().parseFromString(text,'application/xml');
+  if(doc.querySelector('parsererror')) throw new Error('GPXの解析に失敗しました');
+  const num = (el,a)=>parseFloat(el.getAttribute(a));
+  let pts = [...doc.querySelectorAll('trkpt')].map(e=>({lat:num(e,'lat'),lon:num(e,'lon')}));
+  if(pts.length<2) pts = [...doc.querySelectorAll('rtept')].map(e=>({lat:num(e,'lat'),lon:num(e,'lon')}));
+  if(pts.length<2) throw new Error('トラック（trkpt / rtept）が見つかりません');
+  const wpts = [...doc.querySelectorAll('wpt')].map(e=>({lat:num(e,'lat'),lon:num(e,'lon'),name:(e.querySelector('name')?.textContent||'').trim()}));
+  const name = (doc.querySelector('metadata > name, trk > name')?.textContent||'').trim();
+  return {name, pts, wpts};
+}
+
+/* ========== スポット検索 ========== */
+async function pool(items, n, fn){
+  let i=0;
+  await Promise.all(Array.from({length:Math.min(n,items.length)}, async()=>{ while(i<items.length && !cancelled){ await fn(items[i++]); } }));
+}
+function classifyGoogle(types){
+  const t = new Set(types||[]);
+  for(const c of CAT_ORDER) if(CATS[c].g.some(x=>t.has(x))) return c;
+  return null;
+}
+function classifyOsm(tags){
+  for(const c of CAT_ORDER){
+    for(const [k,vals] of Object.entries(CATS[c].osm)) if(vals.includes(tags[k])) return c;
+  }
+  return null;
+}
+async function searchGoogle(track, cats, corridor, onProgress){
+  const {Place, SearchNearbyRankPreference} = await google.maps.importLibrary('places');
+  const radius = Math.round(corridor*1.7);          // 円の重なりで幅±corridorを確実に覆う
+  const samples = sampleTrack(track, radius*1.6);
+  const types = [...new Set(cats.flatMap(c=>CATS[c].g))];
+  const found = new Map(); let done=0, capped=0, err=null;
+  onProgress(0, samples.length);
+  await pool(samples, 3, async s=>{
+    if(err) return;
+    try{
+      const {places} = await Place.searchNearby({
+        fields:['id','displayName','location','formattedAddress','types','businessStatus'],
+        locationRestriction:{center:{lat:s.lat,lng:s.lon}, radius},
+        includedTypes:types, maxResultCount:20, rankPreference:SearchNearbyRankPreference.DISTANCE,
+        language:'ja', region:'jp',
+      });
+      if(places.length>=20) capped++;
+      for(const p of places){
+        if(!p.location || found.has(p.id) || p.businessStatus==='CLOSED_PERMANENTLY') continue;
+        const cat = classifyGoogle(p.types); if(!cat) continue;
+        found.set(p.id,{id:p.id,name:p.displayName||'',lat:p.location.lat(),lon:p.location.lng(),addr:p.formattedAddress||'',cat,source:'google'});
+      }
+    }catch(e){ err=e; cancelled=true; }
+    onProgress(++done, samples.length);
+  });
+  if(err) throw err;
+  if(capped) console.info(`20件上限に達した地点: ${capped}/${samples.length}`);
+  return [...found.values()];
+}
+async function searchOsm(track, simp, cats, corridor, onProgress){
+  const coords = simp.map(i=>track.pts[i].lat.toFixed(5)+','+track.pts[i].lon.toFixed(5)).join(',');
+  const byKey = {};
+  for(const c of cats) for(const [k,vals] of Object.entries(CATS[c].osm)) (byKey[k] ||= []).push(...vals);
+  let q = '[out:json][timeout:120];(';
+  for(const [k,vals] of Object.entries(byKey)) q += `nwr(around:${corridor},${coords})[${k}~"^(${vals.join('|')})$"];`;
+  q += ');out center tags;';
+  onProgress(0,1);
+  const res = await fetch('https://overpass-api.de/api/interpreter',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(q)});
+  if(!res.ok) throw new Error(`Overpass API エラー (${res.status})。しばらく待って再検索してください`);
+  const json = await res.json();
+  onProgress(1,1);
+  const out=[];
+  for(const el of json.elements||[]){
+    const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon; if(lat==null) continue;
+    const t = el.tags||{}; const cat = classifyOsm(t); if(!cat) continue;
+    const name = t['name:ja'] || t.name || t.brand || CATS[cat].label;
+    const addr = t['addr:full'] || [t['addr:province'],t['addr:city'],t['addr:quarter'],t['addr:neighbourhood'],t['addr:block_number'],t['addr:housenumber']].filter(Boolean).join('');
+    out.push({id:el.type[0]+el.id,name,lat,lon,addr,cat,source:'osm',hours:t.opening_hours||''});
+  }
+  return out;
+}
+
+/* ========== 状態 ========== */
+let route=null;        // {name, track, simp, wpts:[{...,km}]}
+let pois=[];           // 検索結果（km付き）
+let markers=[];        // 各POIのマーカー
+let wptMarkers=[];
+let cancelled=false, searching=false;
+let activeLi=null;
+
+async function loadGpxText(text, fileName){
+  const g = parseGpx(text);
+  const track = prepTrack(g.pts);
+  const simp = simplify(track.xy, 15);
+  const wpts = g.wpts.map(w=>{ const p=track.proj(w.lat,w.lon); const n=nearestOnTrack(track,simp,p.x,p.y); return {...w, km:n.km, dist:n.dist}; });
+  route = {name: g.name || fileName.replace(/\.gpx$/i,''), track, simp, wpts, fileName};
+  document.title = route.name+' - Eat on GPX';
+
+  mapApi.drawRoute(g.pts);
+  wptMarkers.forEach(m=>m.remove()); wptMarkers=[];
+  for(const w of wpts){
+    const short = w.name.split(/[\s　]+/)[0] || '●';
+    wptMarkers.push(mapApi.addMarker({lat:w.lat,lon:w.lon,cls:'wp',html:esc(short),color:'#14213d',title:w.name,z:1000,
+      popup:`<div class="pop"><div class="t">🚩 ${esc(w.name)}</div><div class="m">${fmtKm(w.km)} km 地点</div></div>`}));
+  }
+  clearPois();
+  setStatus(`${route.name}：${(track.length/1000).toFixed(1)} km・${g.pts.length.toLocaleString()} 点・ポイント ${wpts.length} 件`);
+  btnSearch.disabled=false;
+  await runSearch(false);
+}
+
+function clearPois(){ markers.forEach(m=>m.remove()); markers=[]; pois=[]; elChips.innerHTML=''; elList.innerHTML=''; btnExport.disabled=true; }
+
+function cacheKey(src){
+  const cats = Object.keys(CATS).filter(k=>settings.cats[k]).join(',');
+  return `eatOnGpx:cache:${route.name}|${Math.round(route.track.length)}|${src}|${settings.corridor}|${cats}`;
+}
+
+async function runSearch(force){
+  if(!route || searching) return;
+  const cats = Object.keys(CATS).filter(k=>settings.cats[k]);
+  if(!cats.length){ setStatus('設定で表示する種類を1つ以上選んでください', true); return; }
+  let src = effectiveSource();
+  if(src==='google' && engine!=='google'){ src='osm'; }
+  const key = cacheKey(src);
+  let raw=null;
+  if(!force){
+    try{ const c=JSON.parse(localStorage.getItem(key)||'null'); if(c && Date.now()-c.t<CACHE_TTL) raw=c.pois; }catch(e){}
+  }
+  searching=true; cancelled=false; btnSearch.disabled=true;
+  clearPois();
+  try{
+    if(raw){
+      setStatus('前回の検索結果（キャッシュ）を表示しています。最新にするには「再検索」。');
+    }else{
+      setStatus(src==='google' ? 'Google Places で検索中…' : 'OpenStreetMap（Overpass）で検索中…（数十秒かかることがあります）');
+      raw = src==='google'
+        ? await searchGoogle(route.track, cats, settings.corridor, setProgress)
+        : await searchOsm(route.track, route.simp, cats, settings.corridor, setProgress);
+      try{ localStorage.setItem(key, JSON.stringify({t:Date.now(), pois:raw})); }catch(e){}
+      setStatus(`${src==='google'?'Google Places':'OpenStreetMap'} で ${raw.length} 件取得`);
+    }
+    showPois(raw);
+  }catch(e){
+    console.error(e);
+    setStatus('検索に失敗しました：'+(e.message||e), true);
+  }finally{
+    searching=false; btnSearch.disabled=false; setProgress(0,0);
+  }
+}
+
+function showPois(raw){
+  const {track,simp}=route;
+  pois = raw.map(p=>{ const q=track.proj(p.lat,p.lon); const n=nearestOnTrack(track,simp,q.x,q.y); return {...p, km:n.km, dist:n.dist}; })
+            .filter(p=>p.dist<=settings.corridor)
+            .sort((a,b)=>a.km-b.km);
+  markers = pois.map(p=>mapApi.addMarker({lat:p.lat,lon:p.lon,cls:'cat-'+p.cat,html:CATS[p.cat].emoji,color:CATS[p.cat].color,title:p.name,popup:popupHtml(p)}));
+  renderChips(); renderList();
+  btnExport.disabled = pois.length===0;
+  const s = elStatus.textContent.replace(/（ルートから.*$/,'');
+  setStatus(`${s}（ルートから ${settings.corridor} m 以内：${pois.length} 件）`);
+}
+
+const hidden = new Set();
+function renderChips(){
+  elChips.innerHTML='';
+  for(const k of Object.keys(CATS)){
+    const n = pois.filter(p=>p.cat===k).length; if(!n && !settings.cats[k]) continue;
+    const c=document.createElement('span'); c.className='chip'+(hidden.has(k)?' off':''); c.style.setProperty('--c',CATS[k].color);
+    c.innerHTML=`${CATS[k].emoji} ${CATS[k].label} <b>${n}</b>`;
+    c.onclick=()=>{ hidden.has(k)?hidden.delete(k):hidden.add(k); c.classList.toggle('off'); applyFilter(); };
+    elChips.appendChild(c);
+  }
+}
+function applyFilter(){
+  pois.forEach((p,i)=> hidden.has(p.cat) ? markers[i].hide() : markers[i].show());
+  renderList();
+}
+function renderList(){
+  elList.innerHTML='';
+  const items = [
+    ...pois.map((p,i)=>({t:'poi',km:p.km,p,i})).filter(x=>!hidden.has(x.p.cat)),
+    ...route.wpts.map(w=>({t:'wpt',km:w.km,w})),
+  ].sort((a,b)=>a.km-b.km);
+  if(!items.length){ elList.innerHTML='<li id="empty">該当するスポットがありません。設定で距離を広げるか、種類を増やしてみてください。</li>'; return; }
+  const frag=document.createDocumentFragment();
+  for(const it of items){
+    const li=document.createElement('li');
+    if(it.t==='wpt'){
+      li.className='wpt';
+      li.innerHTML=`<span class="km">${fmtKm(it.km)}<small> km</small></span><div class="body"><div class="name">🚩 ${esc(it.w.name)}</div></div>`;
+      li.onclick=()=>{ wptMarkers[route.wpts.indexOf(it.w)].open(); setActive(li); };
+    }else{
+      const p=it.p, c=CATS[p.cat];
+      li.style.setProperty('--c',c.color);
+      li.innerHTML=`<span class="km">${fmtKm(p.km)}<small> km</small></span><span class="dot"></span>
+        <div class="body"><div class="name">${c.emoji} ${esc(p.name)}</div>
+        <div class="meta">ルートから ${Math.round(p.dist)} m${p.hours?' · '+esc(p.hours):''}${p.addr?' · '+esc(p.addr):''}</div></div>
+        <a class="ext" href="${gmapsUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">地図↗</a>`;
+      li.onclick=()=>{ markers[it.i].open(); setActive(li); };
+    }
+    frag.appendChild(li);
+  }
+  elList.appendChild(frag);
+}
+function setActive(li){ activeLi?.classList.remove('active'); activeLi=li; li.classList.add('active'); }
+
+function popupHtml(p){
+  const c=CATS[p.cat];
+  return `<div class="pop"><div class="t">${c.emoji} ${esc(p.name)}</div>
+    <div class="m">${c.label} · ${fmtKm(p.km)} km 地点 · ルートから ${Math.round(p.dist)} m</div>
+    ${p.hours?`<div class="m">営業時間: ${esc(p.hours)}</div>`:''}
+    ${p.addr?`<div class="m">${esc(p.addr)}</div>`:''}
+    <div><a href="${gmapsUrl(p)}" target="_blank" rel="noopener">Googleマップで開く ↗</a></div></div>`;
+}
+function gmapsUrl(p){
+  let u=`https://www.google.com/maps/search/?api=1&query=${p.lat.toFixed(6)}%2C${p.lon.toFixed(6)}`;
+  if(p.source==='google') u+=`&query_place_id=${encodeURIComponent(p.id)}`;
+  return u;
+}
+const fmtKm = m => (m/1000).toFixed(1);
+const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ========== GPX書き出し ========== */
+function exportGpx(){
+  const list = pois.filter(p=>!hidden.has(p.cat));
+  const sym = {conbini:'Convenience Store',restaurant:'Restaurant',fastfood:'Fast Food',cafe:'Restaurant',super:'Shopping Center'};
+  let x = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Eat on GPX" xmlns="http://www.topografix.com/GPX/1/1">\n<metadata><name>${esc(route.name)} 沿道スポット</name></metadata>\n`;
+  for(const p of list){
+    x += `<wpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"><name>${esc(fmtKm(p.km))}km ${esc(p.name)}</name>`
+       + `<desc>${esc(CATS[p.cat].label)}／${fmtKm(p.km)}km地点／ルートから${Math.round(p.dist)}m${p.hours?'／'+esc(p.hours):''}</desc><sym>${sym[p.cat]}</sym></wpt>\n`;
+  }
+  x += '</gpx>\n';
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([x],{type:'application/gpx+xml'}));
+  a.download=`${route.name}_spots.gpx`; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+
+/* ========== 設定ダイアログ ========== */
+const dlg=$('#dlg');
+function openSettings(){
+  $('#sKey').value=settings.key; $('#sMapId').value=settings.mapId;
+  const src = settings.source || (settings.key?'google':'osm');
+  dlg.querySelector(`input[name=src][value=${src}]`).checked=true;
+  $('#sCorridor').value=String(settings.corridor);
+  const box=$('#sCats'); box.innerHTML='';
+  for(const [k,c] of Object.entries(CATS)){
+    const l=document.createElement('label');
+    l.innerHTML=`<input type="checkbox" name="cat" value="${k}" ${settings.cats[k]?'checked':''}> ${c.emoji} ${c.label}`;
+    box.appendChild(l);
+  }
+  dlg.showModal();
+}
+$('#btnSettings').onclick=openSettings;
+$('#btnCancel').onclick=()=>dlg.close();
+$('#settingsForm').onsubmit=async e=>{
+  e.preventDefault();
+  const newKey=$('#sKey').value.trim(), newMapId=$('#sMapId').value.trim();
+  const reload = newKey!==settings.key || newMapId!==settings.mapId;
+  settings.key=newKey; settings.mapId=newMapId;
+  settings.source=dlg.querySelector('input[name=src]:checked').value;
+  settings.corridor=parseInt($('#sCorridor').value,10);
+  for(const cb of dlg.querySelectorAll('input[name=cat]')) settings.cats[cb.value]=cb.checked;
+  saveSettings(); dlg.close();
+  if(reload){ location.reload(); return; }
+  if(route) await runSearch(false);
+};
+
+/* ========== 入出力イベント ========== */
+async function handleFile(file){
+  if(!file) return;
+  try{ await loadGpxText(await file.text(), file.name); }
+  catch(e){ console.error(e); setStatus('読み込みエラー：'+e.message, true); }
+}
+$('#gpxFile').onchange=e=>{ handleFile(e.target.files[0]); e.target.value=''; };
+btnSearch.onclick=()=>runSearch(true);
+btnExport.onclick=exportGpx;
+let dragDepth=0;
+document.addEventListener('dragenter',e=>{ e.preventDefault(); if(++dragDepth===1) document.body.classList.add('drag'); });
+document.addEventListener('dragleave',e=>{ if(--dragDepth===0) document.body.classList.remove('drag'); });
+document.addEventListener('dragover',e=>e.preventDefault());
+document.addEventListener('drop',e=>{ e.preventDefault(); dragDepth=0; document.body.classList.remove('drag'); handleFile(e.dataTransfer.files[0]); });
+
+/* ========== 起動 ========== */
+(async()=>{
+  await initMap();
+  const u = new URLSearchParams(location.search).get('gpx');
+  if(u){
+    try{ const r=await fetch(u); if(!r.ok) throw new Error(r.status); await loadGpxText(await r.text(), decodeURIComponent(u.split('/').pop())); }
+    catch(e){ setStatus('GPXを取得できませんでした：'+u, true); }
+  }
+})();
+</script>
+</body>
+</html>

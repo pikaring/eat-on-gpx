@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Eat on GPX｜ルート沿いのコンビニ・食堂を、スタートからの距離順に</title>
+<meta name="description" content="GPXを放り込むと、ルート沿いのコンビニ・レストラン・カフェを地図とスタートからの距離順リストで表示する無料ツール。PCや通過チェックと並べて「次のPCの手前にコンビニがあるか」がすぐ分かります。各スポットはGoogleマップで開けます。">
+<meta property="og:title" content="Eat on GPX">
+<meta property="og:description" content="ルート沿いのコンビニ・食堂を、スタートからの距離順に。GPXを読み込むだけ、Googleマップで開ける。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pikaring.github.io/eat-on-gpx/">
+<meta property="og:image" content="https://pikaring.github.io/eat-on-gpx/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Eat on GPX">
+<meta name="twitter:description" content="ルート沿いのコンビニ・食堂を、スタートからの距離順に。GPXを読み込むだけ、Googleマップで開ける。">
+<meta name="twitter:image" content="https://pikaring.github.io/eat-on-gpx/assets/og.png">
+<link rel="icon" href="assets/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700;750&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="header">
+  <div class="wrap header-inner">
+    <a class="brand" href="#top"><img src="assets/icon.png" alt=""> Eat on GPX</a>
+    <nav class="nav">
+      <a href="#highlight">距離順と地図</a>
+      <a href="#features">できること</a>
+      <a href="#how">使い方</a>
+      <a href="#modes">2つのモード</a>
+      <a href="#faq">よくある質問</a>
+      <a class="btn btn-main" href="app/">ツールを開く</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="pill"><b>無料</b> · インストール不要 · MIT License</span>
+        <h1>次のコンビニまで、<br>あと何km。</h1>
+        <p class="lead">GPXを放り込むだけ。ルート沿いのコンビニ・食堂・カフェが、
+          スタートからの距離順に並びます。PCや通過チェックも同じリストに入るので、
+          「次のPCの手前で補給できるか」が出走前にわかります。</p>
+        <div class="hero-actions">
+          <a class="btn btn-main" href="app/">ツールを開く</a>
+          <a class="btn btn-sub" href="https://github.com/pikaring/eat-on-gpx">GitHubで見る</a>
+        </div>
+        <p class="hero-note">ブラウザだけで動きます。GPXはPCの外に出ません。</p>
+      </div>
+
+      <!-- アプリの画面。実物の配色・構成に合わせてある -->
+      <div class="phone" aria-hidden="true">
+        <div class="phone-screen">
+          <div class="ap-bar">🍙 Eat on GPX <span>📂 GPXを開く</span></div>
+          <div class="ap-map">
+            <svg viewBox="0 0 320 150" xmlns="http://www.w3.org/2000/svg">
+              <rect width="320" height="150" fill="#f3efe6"/>
+              <rect x="0" y="0" width="110" height="60" fill="#e6efd9"/>
+              <rect x="220" y="90" width="100" height="60" fill="#e6efd9"/>
+              <path d="M0 118 C50 110 80 135 140 126 S250 100 320 118 L320 150 L0 150Z" fill="#d6e5f0"/>
+              <g stroke="#dcd7cc" stroke-width="7" fill="none" stroke-linecap="round">
+                <path d="M-10 70 L330 60"/><path d="M120 -10 L150 160"/><path d="M40 -10 L20 160"/><path d="M240 -10 L270 160"/>
+              </g>
+              <g stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round">
+                <path d="M-10 70 L330 60"/><path d="M120 -10 L150 160"/><path d="M40 -10 L20 160"/><path d="M240 -10 L270 160"/>
+              </g>
+              <text x="60" y="40" font-size="8" fill="#9a958a" font-weight="700">◯◯町</text>
+              <!-- ルート -->
+              <path d="M-10 100 L70 92 L132 66 L200 63 L262 62 L330 40" stroke="#fff" stroke-width="7" fill="none" stroke-linejoin="round"/>
+              <path d="M-10 100 L70 92 L132 66 L200 63 L262 62 L330 40" stroke="#1a73e8" stroke-width="4" fill="none" stroke-linejoin="round" opacity=".9"/>
+              <!-- スポット -->
+              <g font-size="9" text-anchor="middle">
+                <circle cx="78" cy="80" r="9" fill="#e53935" stroke="#fff" stroke-width="2"/><text x="78" y="83.5">🏪</text>
+                <circle cx="150" cy="80" r="9" fill="#fb8c00" stroke="#fff" stroke-width="2"/><text x="150" y="83.5">🍚</text>
+                <circle cx="205" cy="50" r="9" fill="#6d4c41" stroke="#fff" stroke-width="2"/><text x="205" y="53.5">☕</text>
+                <circle cx="266" cy="74" r="9" fill="#e53935" stroke="#fff" stroke-width="2"/><text x="266" y="77.5">🏪</text>
+              </g>
+              <!-- PC の旗 -->
+              <rect x="232" y="20" width="36" height="14" rx="4" fill="#14213d"/>
+              <text x="250" y="30.5" font-size="8" font-weight="700" fill="#fff" text-anchor="middle">PC1</text>
+              <polygon points="250,34 246,40 254,40" fill="#14213d" transform="rotate(180 250 37)"/>
+            </svg>
+          </div>
+          <div class="ap-status">OpenStreetMap で 165 件取得（ルートから 300 m 以内：165 件）</div>
+          <div class="ap-chips">
+            <span style="background:#e53935">🏪 コンビニ 40</span>
+            <span style="background:#fb8c00">🍚 レストラン・食堂 94</span>
+            <span style="background:#6d4c41">☕ カフェ 20</span>
+          </div>
+          <div class="ap-row"><span class="km">24.3<small> km</small></span><span class="dot" style="background:#e53935"></span><div class="body"><div class="name">🏪 セブン-イレブン</div><div class="meta">ルートから 37 m · 24/7</div></div><span class="ext">地図↗</span></div>
+          <div class="ap-row active"><span class="km">25.4<small> km</small></span><span class="dot" style="background:#e53935"></span><div class="body"><div class="name">🏪 ローソン 十和田切田通店</div><div class="meta">ルートから 35 m · 24/7</div></div><span class="ext">地図↗</span></div>
+          <div class="ap-row"><span class="km">26.2<small> km</small></span><span class="dot" style="background:#fb8c00"></span><div class="body"><div class="name">🍚 北上うどん店</div><div class="meta">ルートから 9 m</div></div><span class="ext">地図↗</span></div>
+          <div class="ap-row wpt"><span class="km">65.2<small> km</small></span><div class="body"><div class="name">🚩 通過チェックA　傘松峠</div></div></div>
+          <div class="ap-row"><span class="km">69.1<small> km</small></span><span class="dot" style="background:#e53935"></span><div class="body"><div class="name">🏪 コンビニ</div><div class="meta">ルートから 55 m</div></div><span class="ext">地図↗</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="specs">
+    <div class="wrap specs-grid">
+      <div class="spec"><b>スタートからの距離順</b><span>PC・通過チェックと同じリストに並ぶ</span></div>
+      <div class="spec"><b>Googleマップで開く</b><span>iPhoneならマップアプリがそのまま起動</span></div>
+      <div class="spec"><b>キーなしで使える</b><span>OpenStreetMapのデータで今すぐ検索</span></div>
+      <div class="spec"><b>ブラウザ内で処理</b><span>GPXはどこにも送信しません</span></div>
+    </div>
+  </div>
+
+  <section id="highlight">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">01 — LIST &amp; MAP</p>
+        <h2>補給の計画は、<br>「何km地点にあるか」で決まる。</h2>
+        <p>地図に点が打ってあるだけでは、走る順番がわかりません。
+          このツールは、見つけたスポットをルートに射影して「スタートから何km」に直します。</p>
+      </div>
+
+      <div class="hl">
+        <div class="hl-text">
+          <p class="eyebrow">距離順のリスト</p>
+          <h3>PCの手前にコンビニがあるか、一目でわかる。</h3>
+          <p>コンビニ・食堂・ファストフード・カフェを、スタートからの距離で並べます。
+            GPXに入っているPC・通過チェック・ゴールも同じリストに割り込むので、
+            「PC2の10km手前に最後のローソン」といった読み方ができます。</p>
+          <ul>
+            <li>各スポットに「ルートから何m」を表示。脇道に入る距離が見える</li>
+            <li>種類のチップで表示を絞り込み（件数付き）</li>
+            <li>営業時間（OpenStreetMapに登録がある場合）も併記</li>
+            <li>リストをタップすると地図がそこへ寄る</li>
+          </ul>
+        </div>
+        <div class="hl-visual">
+          <div class="list-mock">
+            <div class="ap-row"><span class="km">96.8<small> km</small></span><span class="dot" style="background:#8e24aa"></span><div class="body"><div class="name">🍔 マクドナルド</div><div class="meta">ルートから 37 m</div></div><span class="ext">地図↗</span></div>
+            <div class="ap-row"><span class="km">97.7<small> km</small></span><span class="dot" style="background:#e53935"></span><div class="body"><div class="name">🏪 ローソン</div><div class="meta">ルートから 43 m · 24/7</div></div><span class="ext">地図↗</span></div>
+            <div class="ap-row"><span class="km">103.0<small> km</small></span><span class="dot" style="background:#e53935"></span><div class="body"><div class="name">🏪 ファミリーマート</div><div class="meta">ルートから 63 m</div></div><span class="ext">地図↗</span></div>
+            <div class="ap-row"><span class="km">105.9<small> km</small></span><span class="dot" style="background:#fb8c00"></span><div class="body"><div class="name">🍚 まる鐵二代目</div><div class="meta">ルートから 34 m</div></div><span class="ext">地図↗</span></div>
+            <div class="ap-row wpt"><span class="km">106.4<small> km</small></span><div class="body"><div class="name">🚩 PC1　セブンイレブン弘前新町店</div></div></div>
+            <div class="ap-row"><span class="km">107.2<small> km</small></span><span class="dot" style="background:#6d4c41"></span><div class="body"><div class="name">☕ 成田専蔵珈琲店</div><div class="meta">ルートから 262 m</div></div><span class="ext">地図↗</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hl rev">
+        <div class="hl-text">
+          <p class="eyebrow">Googleマップ連携</p>
+          <h3>見つけたら、そのままGoogleマップへ。</h3>
+          <p>スポットの「地図↗」を押すと、その場所をGoogleマップで開きます。
+            iPhoneならマップアプリが立ち上がるので、営業時間や口コミの確認、
+            ナビへの切り替えがそのままできます。</p>
+          <ul>
+            <li>APIキーを入れれば、地図そのものもGoogleマップになる</li>
+            <li>スポットの取得元もGoogle Placesに切り替え可能（情報が新しい）</li>
+            <li>表示中のスポットをGPX（ウェイポイント）に書き出して、サイコンへ</li>
+          </ul>
+        </div>
+        <div class="hl-visual">
+          <div class="popup-mock">
+            <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg">
+              <rect width="400" height="240" fill="#f3efe6"/>
+              <rect x="250" y="0" width="150" height="90" fill="#e6efd9"/>
+              <rect x="0" y="170" width="120" height="70" fill="#e6efd9"/>
+              <g stroke="#dcd7cc" stroke-width="8" fill="none" stroke-linecap="round">
+                <path d="M-10 150 L410 120"/><path d="M160 -10 L190 250"/><path d="M-10 60 L410 40"/>
+              </g>
+              <g stroke="#fff" stroke-width="6" fill="none" stroke-linecap="round">
+                <path d="M-10 150 L410 120"/><path d="M160 -10 L190 250"/><path d="M-10 60 L410 40"/>
+              </g>
+              <path d="M-10 210 L120 175 L200 172 L300 130 L410 128" stroke="#fff" stroke-width="9" fill="none" stroke-linejoin="round"/>
+              <path d="M-10 210 L120 175 L200 172 L300 130 L410 128" stroke="#1a73e8" stroke-width="5" fill="none" stroke-linejoin="round" opacity=".9"/>
+              <g font-size="12" text-anchor="middle">
+                <circle cx="96" cy="196" r="12" fill="#fb8c00" stroke="#fff" stroke-width="2.5"/><text x="96" y="200.5">🍚</text>
+                <circle cx="320" cy="150" r="12" fill="#e53935" stroke="#fff" stroke-width="2.5"/><text x="320" y="154.5">🏪</text>
+                <circle cx="228" cy="188" r="12" fill="#e53935" stroke="#fff" stroke-width="2.5"/><text x="228" y="192.5">🏪</text>
+              </g>
+              <!-- ポップアップ -->
+              <g>
+                <path d="M228 176 L220 166 L236 166 Z" fill="#fff"/>
+                <rect x="70" y="52" width="270" height="114" rx="12" fill="#fff" stroke="#e5e7eb"/>
+                <text x="88" y="80" font-size="15" font-weight="700" fill="#1f2933">🏪 ローソン 十和田切田通店</text>
+                <text x="88" y="102" font-size="12" fill="#6b7280">コンビニ · 25.4 km 地点 · ルートから 35 m</text>
+                <text x="88" y="120" font-size="12" fill="#6b7280">営業時間: 24/7</text>
+                <text x="88" y="148" font-size="13" fill="#1a73e8" text-decoration="underline">Googleマップで開く ↗</text>
+              </g>
+            </svg>
+            <div class="mini-cap">ポップアップから、Googleマップへ</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt" id="features">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">02 — FEATURES</p>
+        <h2>ルート図を、<br>補給計画に変える。</h2>
+        <p>主催者から届くのはGPXの線だけ。そこに「どこで何が買えるか」を足します。</p>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <p class="num">01</p>
+          <h3>ルートに沿って探す</h3>
+          <p>ルートから一定距離（100m〜1km）の範囲だけを探します。</p>
+          <ul>
+            <li>ルートを等間隔にサンプリングして周辺を検索し、結果を合成</li>
+            <li>見つけた地点をルートに射影して「何km地点」「ルートから何m」を算出</li>
+            <li>範囲外のスポットは除外されるので、市街地でも見通しがよい</li>
+          </ul>
+        </div>
+        <div class="card">
+          <p class="num">02</p>
+          <h3>PCと並べて読む</h3>
+          <p>GPXのウェイポイント（PC・通過チェック・START/FINISH）を旗で表示。</p>
+          <ul>
+            <li>リストではPC行が色付きで割り込む</li>
+            <li>「PCの手前○kmに最後の補給」がその場で読める</li>
+            <li>地図の旗をタップするとkm地点を表示</li>
+          </ul>
+        </div>
+        <div class="card">
+          <p class="num">03</p>
+          <h3>種類で絞る・GPXに出す</h3>
+          <p>コンビニ／レストラン・食堂／ファストフード／カフェ／スーパー。</p>
+          <ul>
+            <li>チップで表示・非表示を切り替え（件数付き）</li>
+            <li>表示中のスポットをウェイポイントGPXに書き出し</li>
+            <li>サイクルコンピュータやRide with GPSに取り込める</li>
+          </ul>
+        </div>
+        <div class="card">
+          <p class="num">04</p>
+          <h3>無駄な通信をしない</h3>
+          <p>同じGPX・同じ設定なら、前回の結果をそのまま使います。</p>
+          <ul>
+            <li>検索結果は7日間ブラウザにキャッシュ</li>
+            <li>Google Places を使う場合の無料枠を守れる</li>
+            <li>「再検索」でいつでも最新に</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="night" id="how">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">03 — HOW TO USE</p>
+        <h2>GPXを置くだけ。</h2>
+        <p>アカウントもインストールも要りません。ブラウザで開いて、
+          ファイルを1つ放り込むところから始まります。</p>
+      </div>
+
+      <div class="night-grid">
+        <div class="night-list">
+          <div class="night-item">
+            <b>用意するもの</b>
+            <span>主催者配布のGPX（トラック形式）。Ride with GPS などから書き出したものでも構いません。
+              ウェイポイントが入っていればPCとして表示します。</span>
+          </div>
+          <div class="night-item">
+            <b>ファイルは外に出ません</b>
+            <span>GPXの読み込みも距離の計算もブラウザの中だけ。外部に送るのは、
+              地図タイルとスポット検索のための緯度経度だけです。</span>
+          </div>
+          <div class="night-item">
+            <b>スマホでも</b>
+            <span>画面の上半分が地図、下半分がリスト。出走前の宿でも、コンビニの軒先でも開けます。</span>
+          </div>
+        </div>
+
+        <div class="steps-box">
+          <div class="flow-step"><em>STEP1</em><span>「GPXを開く」か、ドラッグ＆ドロップ</span></div>
+          <div class="flow-step"><em>STEP2</em><span>自動で検索。数秒〜数十秒でリストが出る</span></div>
+          <div class="flow-step"><em>STEP3</em><span>チップで種類を絞り、リストをタップして地図で確認</span></div>
+          <div class="flow-step"><em>STEP4</em><span>「地図↗」でGoogleマップへ。必要ならGPXに書き出し</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="modes">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">04 — TWO MODES</p>
+        <h2>キーなしで始めて、<br>必要ならGoogleに切り替える。</h2>
+        <p>地図とスポットのデータは2系統。既定はキー不要のOpenStreetMapで、
+          設定にGoogle Maps APIキーを入れると地図もデータもGoogleになります。</p>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div class="n">O</div>
+          <h3>OpenStreetMapモード（既定）</h3>
+          <p>準備なしで今すぐ使えます。地方のコンビニは概ね登録されており、ブルベの補給計画には十分です。</p>
+          <table>
+            <tr><th>地図</th><td>OpenStreetMap（Leaflet）</td></tr>
+            <tr><th>データ</th><td>Overpass API（OSM）</td></tr>
+            <tr><th>必要なもの</th><td>なし</td></tr>
+            <tr><th>営業時間</th><td>OSMに登録があれば表示</td></tr>
+          </table>
+        </div>
+        <div class="step">
+          <div class="n">G</div>
+          <h3>Googleモード</h3>
+          <p>Google Cloud のAPIキー（Maps JavaScript API と Places API (New) を有効化）を設定に入れるだけ。キーはブラウザにしか保存しません。</p>
+          <table>
+            <tr><th>地図</th><td>Google Maps</td></tr>
+            <tr><th>データ</th><td>Google Places API (New)</td></tr>
+            <tr><th>必要なもの</th><td>APIキー（請求先登録が必要）</td></tr>
+            <tr><th>費用の目安</th><td>200kmで約250回。無料枠内</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="caution">
+        <b>営業時間・定休日は、出発前に必ず確認してください。</b>
+        表示されるスポットは OpenStreetMap または Google のデータをそのまま使っており、
+        閉店・移転が反映されていないことがあります。深夜・早朝に通過する区間では、
+        「地図↗」から営業時間を確かめるか、24時間営業の店を前提に計画してください。
+      </div>
+    </div>
+  </section>
+
+  <section class="faq" id="faq">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">05 — FAQ</p>
+        <h2>よくある質問</h2>
+      </div>
+
+      <details>
+        <summary>アップロードしたGPXは、どこかに送信されますか？</summary>
+        <p>されません。GPXはブラウザの中だけで読み込んで処理します。
+          外部と通信するのは、地図タイルとスポット検索（Overpass API または Google Places）に
+          緯度経度を渡すときだけです。</p>
+      </details>
+      <details>
+        <summary>Google の APIキーは必須ですか？</summary>
+        <p>必須ではありません。既定の OpenStreetMap モードはキーなしで動きます。
+          Googleの地図やPlacesの情報を使いたいときだけ、設定にキーを入れてください。
+          キーはブラウザの localStorage に保存され、Google 以外には送信しません。</p>
+      </details>
+      <details>
+        <summary>Googleモードの費用はどのくらいですか？</summary>
+        <p>Places Nearby Search は、200kmのルートを「ルートから300m」で探すと約250回の呼び出しです。
+          月あたりの無料枠に収まる範囲ですが、距離を広げると回数が増えます。
+          同じGPX・同じ設定なら結果を7日間キャッシュして再検索しません。</p>
+      </details>
+      <details>
+        <summary>店が抜けている・閉店した店が出る</summary>
+        <p>OpenStreetMap モードでは、登録されていない店は出ません。Google モードは1地点あたり20件までしか返さないため、
+          繁華街では取りこぼすことがあります。どちらも閉店・移転が反映されていない場合があるので、
+          「地図↗」でGoogleマップを開いて確認してください。</p>
+      </details>
+      <details>
+        <summary>ルート形式（rte）のGPXでも使えますか？</summary>
+        <p>使えます。トラック（trkpt）が無い場合はルートポイント（rtept）を読みます。
+          点が粗いGPXだと、道から外れた場所を「ルート上」とみなすことがあります。</p>
+      </details>
+      <details>
+        <summary>書き出したGPXは何に使えますか？</summary>
+        <p>表示中のスポットをウェイポイントとして書き出します。サイクルコンピュータや
+          Ride with GPS などに取り込むと、走行中に「○km地点 ローソン」として表示できます。</p>
+      </details>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="wrap">
+      <p class="eyebrow" style="justify-content:center">READY TO EAT</p>
+      <h2>次のブルベの補給計画に。</h2>
+      <p style="margin-top:14px">インストールも登録も要りません。ブラウザで開いてすぐ使えます。</p>
+      <div class="hero-actions">
+        <a class="btn btn-main" href="app/">ツールを開く</a>
+        <a class="btn btn-sub" href="https://github.com/pikaring/eat-on-gpx">GitHubで見る</a>
+      </div>
+      <p class="hero-note">MIT License · サンプルのGPXで試せます</p>
+    </div>
+  </section>
+
+  <section class="family" id="family">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">MORE TOOLS</p>
+        <h2>同じ作者の、ほかのツール。</h2>
+      </div>
+      <div class="family-grid">
+        <a class="fam" href="https://pikaring.github.io/rock-on-mj/"><img src="https://pikaring.github.io/rock-on-mj/assets/icon.png" alt=""><b>ROCK ON MJ</b><span>Web会議を録音して、PCの中だけで文字起こし</span></a>
+        <a class="fam" href="https://pikaring.github.io/ride-on-qc/"><img src="https://pikaring.github.io/ride-on-qc/assets/icon.png" alt=""><b>Ride on QC</b><span>曲がり角ごとの地図と風向きが出る、ブルベのキューシート</span></a>
+        <a class="fam" href="https://pikaring.github.io/reach-on-sanma/"><img src="https://pikaring.github.io/reach-on-sanma/assets/icon.png" alt=""><b>Reach on SANMA</b><span>登録もダウンロードも要らない三人麻雀</span></a>
+        <a class="fam current" href="https://pikaring.github.io/eat-on-gpx/"><img src="https://pikaring.github.io/eat-on-gpx/assets/icon.png" alt=""><b>Eat on GPX</b><span>ルート沿いのコンビニ・食堂を、スタートからの距離順に</span><em>このページ</em></a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <span>Eat on GPX</span>
+    <a href="https://github.com/pikaring/eat-on-gpx">GitHub</a>
+    <a href="https://github.com/pikaring/eat-on-gpx/blob/main/LICENSE">MIT License</a>
+    <a href="https://github.com/pikaring/eat-on-gpx/blob/main/README.md">README</a>
+    <span class="counter">累計アクセス <b id="counter-value">―</b> 回</span>
+    <span class="sep">地図に <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>／<a href="https://leafletjs.com/">Leaflet</a>、スポットに <a href="https://overpass-api.de/">Overpass API</a> または <a href="https://developers.google.com/maps/documentation/places/web-service/op-overview">Google Places</a> を利用</span>
+  </div>
+</footer>
+
+<script>
+// アクセスカウンター（ほかの紹介ページと同じGAS。page名でサイトごとに別カウント）
+(function () {
+  var el = document.getElementById('counter-value');
+  if (!el) return;
+  var page = location.pathname.replace(/index\.html$/, '');
+  fetch('https://script.google.com/macros/s/AKfycbxkQLZXNAFXkT7zhIO0TmMDGU3A0TQ234Lf-yhw5J7lvFAjCi3KLNLRd_LKd_xlOxPd/exec?page=' + encodeURIComponent(page))
+    .then(function (r) { return r.json(); })
+    .then(function (d) { el.textContent = Number(d.count).toLocaleString('ja-JP'); })
+    .catch(function () { el.textContent = '―'; });
+})();
+</script>
+</body>
+</html>
