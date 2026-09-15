@@ -431,7 +431,7 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
   for(const el of json.elements||[]){
     const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon; if(lat==null) continue;
     const t = el.tags||{}; const cat = classifyOsm(t); if(!cat) continue;
-    const name = t['name:ja'] || t.name || t.brand || CATS[cat].label;
+    const name = t['name:ja'] || t.name || t.brand || t['brand:ja'] || (CATS[cat].label+'（名称未登録）');
     const addr = t['addr:full'] || [t['addr:province'],t['addr:city'],t['addr:quarter'],t['addr:neighbourhood'],t['addr:block_number'],t['addr:housenumber']].filter(Boolean).join('');
     out.push({id:el.type[0]+el.id,name,lat,lon,addr,cat,source:'osm',hours:t.opening_hours||''});
   }
@@ -569,7 +569,8 @@ function popupHtml(p){
     <div class="m">${c.label} · ${fmtKm(p.km)} km 地点 · ルートから ${Math.round(p.dist)} m</div>
     ${p.hours?`<div class="m">営業時間: ${esc(p.hours)}</div>`:''}
     ${p.addr?`<div class="m">${esc(p.addr)}</div>`:''}
-    <div><a href="${gmapsUrl(p)}" target="_blank" rel="noopener">Googleマップで開く ↗</a></div></div>`;
+    <div><a href="${gmapsUrl(p)}" target="_blank" rel="noopener">Googleマップで開く ↗</a></div>
+    ${p.source==='osm'?'<div class="m" style="font-size:11px;margin-top:4px">OpenStreetMapの登録データです。閉店・移転が反映されていないことがあります</div>':''}</div>`;
 }
 function gmapsUrl(p){
   let u=`https://www.google.com/maps/search/?api=1&query=${p.lat.toFixed(6)}%2C${p.lon.toFixed(6)}`;

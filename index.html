@@ -28,6 +28,7 @@
   <div class="wrap header-inner">
     <a class="brand" href="#top"><img src="assets/icon.png" alt=""> Eat on GPX</a>
     <nav class="nav">
+      <a href="#goods">道具</a>
       <a href="#highlight">距離順と地図</a>
       <a href="#features">できること</a>
       <a href="#how">使い方</a>
@@ -112,6 +113,42 @@
       <div class="spec"><b>ブラウザ内で処理</b><span>GPXはどこにも送信しません</span></div>
     </div>
   </div>
+
+  <section class="goods" id="goods">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">GEAR</p>
+        <h2>コンビニの間を、つなぐ道具。</h2>
+        <p>次のコンビニまで50kmある区間もあります。手の届く場所に補給食を入れておく袋と、その中身、そしてこのアプリを見るスマホの電源を並べておきます。</p>
+      </div>
+      <div class="goods-grid">
+        <div class="good" data-asin="B00SZ1I7R4">
+          <p class="gcat">トップチューブバッグ</p>
+          <h3>TOPEAK Fuel Tank (L)</h3>
+          <p>走りながら手が届く位置に補給食を入れておく袋。名前のとおり「燃料タンク」で、ようかん数本とスマホが入ります。</p>
+          <a class="glink" href="https://www.amazon.co.jp/dp/B00SZ1I7R4?tag=redcomet-22" target="_blank" rel="sponsored noopener">Amazonで見る ↗</a>
+        </div>
+        <div class="good" data-asin="B0FGQ21Z25">
+          <p class="gcat">補給食</p>
+          <h3>井村屋 スポーツようかん あずき</h3>
+          <p>片手で押し出して食べられる40gのようかん。溶けない・つぶれない・コンビニで売っていない、の三拍子で、区間の長い夜に効きます。</p>
+          <a class="glink" href="https://www.amazon.co.jp/dp/B0FGQ21Z25?tag=redcomet-22" target="_blank" rel="sponsored noopener">Amazonで見る ↗</a>
+        </div>
+        <div class="good" data-asin="B003ERAWPY">
+          <p class="gcat">塩分補給</p>
+          <h3>ミドリ安全 塩熱サプリ</h3>
+          <p>汗で失う電解質をタブレットで。夏のブルベで足が攣る前に1粒。バッグの隅に1袋あると安心です。</p>
+          <a class="glink" href="https://www.amazon.co.jp/dp/B003ERAWPY?tag=redcomet-22" target="_blank" rel="sponsored noopener">Amazonで見る ↗</a>
+        </div>
+        <div class="good" data-asin="B019GNUT0C">
+          <p class="gcat">モバイルバッテリー</p>
+          <h3>Anker PowerCore 10000</h3>
+          <p>このアプリもGoogleマップもスマホで見るものなので、電源が切れると補給計画ごと消えます。10000mAhで2回分。</p>
+          <a class="glink" href="https://www.amazon.co.jp/dp/B019GNUT0C?tag=redcomet-22" target="_blank" rel="sponsored noopener">Amazonで見る ↗</a>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <section id="highlight">
     <div class="wrap">
@@ -412,6 +449,7 @@
     <a href="https://github.com/pikaring/eat-on-gpx/blob/main/README.md">README</a>
     <span class="counter">累計アクセス <b id="counter-value">―</b> 回</span>
     <span class="sep">地図に <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>／<a href="https://leafletjs.com/">Leaflet</a>、スポットに <a href="https://overpass-api.de/">Overpass API</a> または <a href="https://developers.google.com/maps/documentation/places/web-service/op-overview">Google Places</a> を利用</span>
+    <span class="disclosure">当サイトはAmazonアソシエイト・プログラムに参加しており、掲載しているリンクから商品が買われると運営者に紹介料が入る場合があります。</span>
   </div>
 </footer>
 
@@ -425,6 +463,35 @@
     .then(function (r) { return r.json(); })
     .then(function (d) { el.textContent = Number(d.count).toLocaleString('ja-JP'); })
     .catch(function () { el.textContent = '―'; });
+})();
+</script>
+<script>
+// Amazon Creators API で取った商品情報（tools/fetch_goods.py が assets/goods.json に書く）。
+// 取れていれば画像と価格を足し、無ければテキストカードのまま。
+(function () {
+  var cards = document.querySelectorAll('.good[data-asin]');
+  if (!cards.length) return;
+  fetch('assets/goods.json', { cache: 'no-cache' }).then(function (r) { return r.json(); }).then(function (d) {
+    var at = new Date(d.fetchedAt);
+    var stamp = isNaN(at) ? '' : (at.getMonth() + 1) + '/' + at.getDate() + '時点';
+    cards.forEach(function (c) {
+      var it = d.items && d.items[c.dataset.asin];
+      if (!it) return;
+      if (it.image) {
+        var img = document.createElement('img');
+        img.className = 'gimg'; img.src = it.image; img.alt = ''; img.loading = 'lazy';
+        c.insertBefore(img, c.firstChild);
+      }
+      if (it.price) {
+        var p = document.createElement('p');
+        p.className = 'gprice';
+        p.innerHTML = it.price + (stamp ? ' <small>' + stamp + '</small>' : '');
+        var link = c.querySelector('.glink');
+        c.insertBefore(p, link);
+      }
+      if (it.url) { var a = c.querySelector('.glink'); if (a) a.href = it.url; }
+    });
+  }).catch(function () { /* 取れなければ何もしない */ });
 })();
 </script>
 </body>
