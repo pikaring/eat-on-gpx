@@ -181,15 +181,19 @@ const CATS = {
   fastfood:  {label:'ファストフード',   emoji:'🍔', color:'#8e24aa', g:['fast_food_restaurant','meal_takeaway'], osm:{amenity:['fast_food']}, on:true},
   cafe:      {label:'カフェ',         emoji:'☕', color:'#6d4c41', g:['cafe','coffee_shop'],             osm:{amenity:['cafe']},           on:true},
   super:     {label:'スーパー・ドラッグストア', emoji:'🛒', color:'#43a047', g:['supermarket','drugstore'], osm:{shop:['supermarket','chemist']}, on:false},
+  onsen:     {label:'日帰り温泉・銭湯', emoji:'♨️', color:'#00838f', g:['public_bath','spa'],             osm:{amenity:['public_bath']},  on:true},
 };
-const CAT_ORDER = ['conbini','fastfood','cafe','restaurant','super']; // 判定の優先順
+const CAT_ORDER = ['conbini','onsen','fastfood','cafe','restaurant','super']; // 判定の優先順
 const LS_KEY = 'eatOnGpx:settings';
 const CACHE_TTL = 7*24*3600*1000;
 
 const settings = loadSettings();
 function loadSettings(){
   const d = {key:'', mapId:'', source:'', corridor:300, cats:Object.fromEntries(Object.entries(CATS).map(([k,v])=>[k,v.on]))};
-  try{ Object.assign(d, JSON.parse(localStorage.getItem(LS_KEY)||'{}')); }catch(e){}
+  try{
+    const saved = JSON.parse(localStorage.getItem(LS_KEY)||'{}');
+    Object.assign(d, saved, {cats:{...d.cats, ...(saved.cats||{})}});   // 後から増えた種類は既定値で補う
+  }catch(e){}
   return d;
 }
 function saveSettings(){ localStorage.setItem(LS_KEY, JSON.stringify(settings)); }
@@ -431,7 +435,7 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
   for(const el of json.elements||[]){
     const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon; if(lat==null) continue;
     const t = el.tags||{}; const cat = classifyOsm(t); if(!cat) continue;
-    const name = t['name:ja'] || t.name || t.brand || t['brand:ja'] || (CATS[cat].label+'（名称未登録）');
+    const name = (t['name:ja'] || t.name || t.brand || t['brand:ja'] || (CATS[cat].label+'（名称未登録）')).replace(/;/g,'／');  // OSMの複数値は ; 区切り
     const addr = t['addr:full'] || [t['addr:province'],t['addr:city'],t['addr:quarter'],t['addr:neighbourhood'],t['addr:block_number'],t['addr:housenumber']].filter(Boolean).join('');
     out.push({id:el.type[0]+el.id,name,lat,lon,addr,cat,source:'osm',hours:t.opening_hours||''});
   }
@@ -583,7 +587,7 @@ const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'
 /* ========== GPX書き出し ========== */
 function exportGpx(){
   const list = pois.filter(p=>!hidden.has(p.cat));
-  const sym = {conbini:'Convenience Store',restaurant:'Restaurant',fastfood:'Fast Food',cafe:'Restaurant',super:'Shopping Center'};
+  const sym = {conbini:'Convenience Store',restaurant:'Restaurant',fastfood:'Fast Food',cafe:'Restaurant',super:'Shopping Center',onsen:'Hot Spring'};
   let x = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Eat on GPX" xmlns="http://www.topografix.com/GPX/1/1">\n<metadata><name>${esc(route.name)} 沿道スポット</name></metadata>\n`;
   for(const p of list){
     x += `<wpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"><name>${esc(fmtKm(p.km))}km ${esc(p.name)}</name>`
