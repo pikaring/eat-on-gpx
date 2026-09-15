@@ -162,7 +162,7 @@ body.drag::after{
         <option value="100">100 m</option><option value="200">200 m</option><option value="300">300 m</option>
         <option value="500">500 m</option><option value="1000">1 km</option>
       </select>
-      <span class="hint">Google Places の場合、200 km のルートで 300 m なら約 250 回の検索になります（無料枠は月 5,000 回程度）。</span>
+      <span class="hint">Google Places の場合、200 km のルートで 300 m なら約 250 回の検索（100 m なら約 750 回、1 km なら約 75 回）。無料枠は月 5,000 回程度。今月このブラウザから <b id="sCalls">0</b> 回。</span>
     </label>
     <fieldset><legend>表示する種類</legend><div class="row" id="sCats"></div></fieldset>
     <div class="foot">
@@ -390,6 +390,10 @@ function classifyOsm(tags){
   }
   return null;
 }
+// 今月のPlaces API呼び出し回数（このブラウザ分）。無料枠の目安用
+const callsKey = ()=>'eatOnGpx:calls:'+new Date().toISOString().slice(0,7);
+const getCalls = ()=>parseInt(localStorage.getItem(callsKey())||'0',10);
+function countCall(){ try{ localStorage.setItem(callsKey(), String(getCalls()+1)); }catch(e){} }
 async function searchGoogle(track, cats, corridor, onProgress){
   const {Place, SearchNearbyRankPreference} = await google.maps.importLibrary('places');
   const radius = Math.round(corridor*1.7);          // 円の重なりで幅±corridorを確実に覆う
@@ -397,6 +401,7 @@ async function searchGoogle(track, cats, corridor, onProgress){
   const types = [...new Set(cats.flatMap(c=>CATS[c].g))];
   const found = new Map(); let done=0, capped=0, err=null;
   onProgress(0, samples.length);
+  setStatus(`Google Places で検索中…（${samples.length} 地点）`);
   await pool(samples, 3, async s=>{
     if(err) return;
     try{
@@ -406,6 +411,7 @@ async function searchGoogle(track, cats, corridor, onProgress){
         includedTypes:types, maxResultCount:20, rankPreference:SearchNearbyRankPreference.DISTANCE,
         language:'ja', region:'jp',
       });
+      countCall();
       if(places.length>=20) capped++;
       for(const p of places){
         if(!p.location || found.has(p.id) || p.businessStatus==='CLOSED_PERMANENTLY') continue;
@@ -496,11 +502,13 @@ async function runSearch(force){
       setStatus('前回の検索結果（キャッシュ）を表示しています。最新にするには「再検索」。');
     }else{
       setStatus(src==='google' ? 'Google Places で検索中…' : 'OpenStreetMap（Overpass）で検索中…（数十秒かかることがあります）');
+      const before = getCalls();
       raw = src==='google'
         ? await searchGoogle(route.track, cats, settings.corridor, setProgress)
         : await searchOsm(route.track, route.simp, cats, settings.corridor, setProgress);
+      const lastCalls = getCalls()-before;
       try{ localStorage.setItem(key, JSON.stringify({t:Date.now(), pois:raw})); }catch(e){}
-      setStatus(`${src==='google'?'Google Places':'OpenStreetMap'} で ${raw.length} 件取得`);
+      setStatus(src==='google' ? `Google Places で ${raw.length} 件取得（API呼び出し ${lastCalls} 回・今月累計 ${getCalls()} 回）` : `OpenStreetMap で ${raw.length} 件取得`);
     }
     showPois(raw);
   }catch(e){
@@ -603,7 +611,7 @@ function exportGpx(){
 /* ========== 設定ダイアログ ========== */
 const dlg=$('#dlg');
 function openSettings(){
-  $('#sKey').value=settings.key; $('#sMapId').value=settings.mapId;
+  $('#sKey').value=settings.key; $('#sMapId').value=settings.mapId; $('#sCalls').textContent=getCalls();
   const src = settings.source || (settings.key?'google':'osm');
   dlg.querySelector(`input[name=src][value=${src}]`).checked=true;
   $('#sCorridor').value=String(settings.corridor);
