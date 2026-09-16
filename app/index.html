@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Eat on GPX</title>
 <link rel="icon" href="../assets/favicon.ico">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" onerror="window.__leafletFailed=true"></script>
+<!-- Leaflet は同梱（CDNが詰まる・ブロックされると地図が出ないため。オフラインでも動く） -->
+<link rel="stylesheet" href="vendor/leaflet-1.9.4.min.css">
+<script src="vendor/leaflet-1.9.4.min.js" onerror="window.__leafletFailed=true"></script>
 <style>
 :root{
   --bg:#f3f4f6; --panel:#fff; --ink:#1f2933; --muted:#6b7280; --line:#e5e7eb;
@@ -333,7 +334,7 @@ async function initMap(){
     }
   }
   if(window.__leafletFailed || typeof L === 'undefined')
-    throw new Error('地図ライブラリ（Leaflet）を読み込めませんでした。通信状態を確かめて再読み込みしてください');
+    throw new Error('地図ライブラリ（Leaflet）を読み込めませんでした。ページを再読み込みしてください');
   mapApi = new LeafletMap(el); engine = 'leaflet';
 }
 
@@ -487,8 +488,8 @@ async function overpassFetch(query){
       catch(e){ throw new Error('サーバーから想定外の応答がありました。ネットワーク接続を確認してください'); }
     }catch(e){
       if(e.fatal) throw e;                       // 待っても変わらないものは即あきらめる
-      lastErr = (e.name==='AbortError')
-        ? new Error('通信がタイムアウトしました。電波の良い場所で「再検索」してください')
+      lastErr = e.name==='AbortError' ? new Error('通信がタイムアウトしました。電波の良い場所で「再検索」してください')
+        : e instanceof TypeError ? new Error('ネットワークに接続できませんでした')   // 圏外・回線切断（Safariは "Load failed"）
         : e;
       if(attempt<3) await sleep(1200*(attempt+1));
     }finally{
@@ -534,6 +535,7 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
   for(const c of cats) for(const [k,vals] of Object.entries(CATS[c].osm)) (byKey[k] ||= []).push(...vals);
   const chunks = chunkTrack(track, thinIndices(track, simp, Math.max(30, corridor/4)));
   const found = new Map();
+  const failed = []; let lastErr = null;
   onProgress(0, chunks.length);
   for(let n=0; n<chunks.length; n++){
     if(cancelled) break;
@@ -542,10 +544,19 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
     let q = '[out:json][timeout:60];(';
     for(const [k,vals] of Object.entries(byKey)) q += `nwr(around:${corridor},${coords})[${k}~"^(${vals.join('|')})$"];`;
     q += ');out center tags;';
-    const json = await overpassFetch(q);
-    for(const el of json.elements||[]){ const poi = osmElementToPoi(el); if(poi) found.set(poi.id, poi); }
+    try{
+      const json = await overpassFetch(q);
+      for(const el of json.elements||[]){ const poi = osmElementToPoi(el); if(poi) found.set(poi.id, poi); }
+    }catch(e){
+      // 1区間の失敗で全部を捨てない。取れた区間はそのまま出して、欠けたことを伝える
+      console.error(e); failed.push(n+1); lastErr = e;
+    }
     onProgress(n+1, chunks.length);
   }
+  if(chunks.length && failed.length===chunks.length) throw lastErr;   // 全滅したときだけエラー扱い
+  searchWarning = failed.length
+    ? `${chunks.length}区間のうち${failed.length}区間が取得できませんでした（${lastErr.message}）。「🔍 再検索」でやり直せます`
+    : '';
   return [...found.values()];
 }
 
@@ -555,6 +566,8 @@ let pois=[];           // 検索結果（km付き）
 let markers=[];        // 各POIのマーカー
 let wptMarkers=[];
 let cancelled=false, searching=false;
+let searchWarning='';    // 一部の区間だけ取れなかったときの注意書き
+let searchFailed=false;  // 直前の検索が失敗したか（復帰時の自動リトライ用）
 let activeLi=null;
 
 async function loadGpxText(text, fileName){
@@ -596,7 +609,7 @@ async function runSearch(force){
   if(!force){
     try{ const c=JSON.parse(LS.get(key)||'null'); if(c && Date.now()-c.t<CACHE_TTL) raw=c.pois; }catch(e){}
   }
-  searching=true; cancelled=false; btnSearch.disabled=true;
+  searching=true; cancelled=false; searchWarning=''; searchFailed=false; btnSearch.disabled=true;
   clearPois();
   try{
     if(raw){
@@ -608,13 +621,15 @@ async function runSearch(force){
         ? await searchGoogle(route.track, cats, settings.corridor, setProgress)
         : await searchOsm(route.track, route.simp, cats, settings.corridor, setProgress);
       const lastCalls = getCalls()-before;
-      LS.set(key, JSON.stringify({t:Date.now(), pois:raw}));
-      setStatus(src==='google' ? `Google Places で ${raw.length} 件取得（API呼び出し ${lastCalls} 回・今月累計 ${getCalls()} 回）` : `OpenStreetMap で ${raw.length} 件取得`);
+      if(!searchWarning) LS.set(key, JSON.stringify({t:Date.now(), pois:raw}));   // 欠けた結果は保存しない
+      const got = src==='google' ? `Google Places で ${raw.length} 件取得（API呼び出し ${lastCalls} 回・今月累計 ${getCalls()} 回）` : `OpenStreetMap で ${raw.length} 件取得`;
+      setStatus(searchWarning ? `${got}／${searchWarning}` : got, !!searchWarning);
     }
     showPois(raw);
   }catch(e){
     console.error(e);
-    setStatus('検索に失敗しました：'+(e.message||e), true);
+    searchFailed = true;
+    setStatus('検索に失敗しました：'+(e.message||e)+'（「🔍 再検索」でやり直せます）', true);
   }finally{
     searching=false; btnSearch.disabled=false; setProgress(0,0);
   }
@@ -629,7 +644,7 @@ function showPois(raw){
   renderChips(); renderList();
   btnExport.disabled = pois.length===0;
   const s = elStatus.textContent.replace(/（ルートから.*$/,'');
-  setStatus(`${s}（ルートから ${settings.corridor} m 以内：${pois.length} 件）`);
+  setStatus(`${s}（ルートから ${settings.corridor} m 以内：${pois.length} 件）`, elStatus.classList.contains('err'));
 }
 
 const hidden = new Set();
@@ -763,6 +778,11 @@ document.addEventListener('dragover',e=>e.preventDefault());
 document.addEventListener('drop',e=>{ e.preventDefault(); dragDepth=0; document.body.classList.remove('drag'); handleFile(e.dataTransfer.files[0]); });
 
 /* ========== 起動 ========== */
+// iOS Safari は画面ロックやアプリ切り替えで通信中のリクエストを打ち切るので、戻ってきたら自動でやり直す
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='visible' && route && searchFailed && !searching) runSearch(true);
+});
+
 window.addEventListener('error', e=>{ if(e.message) setStatus('エラーが発生しました：'+e.message, true); });
 window.addEventListener('unhandledrejection', e=>setStatus('エラーが発生しました：'+(e.reason?.message||e.reason), true));
 
