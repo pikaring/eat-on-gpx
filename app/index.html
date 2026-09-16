@@ -6,7 +6,7 @@
 <title>Eat on GPX</title>
 <link rel="icon" href="../assets/favicon.ico">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" onerror="window.__leafletFailed=true"></script>
 <style>
 :root{
   --bg:#f3f4f6; --panel:#fff; --ink:#1f2933; --muted:#6b7280; --line:#e5e7eb;
@@ -89,12 +89,14 @@ main{flex:1;display:flex;min-height:0}
 .leaflet-popup-content{margin:10px 14px}
 
 /* 設定ダイアログ */
-dialog{border:0;border-radius:12px;padding:0;max-width:min(92vw,460px);width:100%;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+dialog{border:0;border-radius:12px;padding:0;max-width:min(92vw,460px);width:100%;box-shadow:0 10px 40px rgba(0,0,0,.3);
+  max-height:85dvh;overflow:auto;overscroll-behavior:contain}   /* 小さい画面でも保存ボタンまでスクロールできるように */
 dialog::backdrop{background:rgba(0,0,0,.4)}
 dialog form{padding:18px 20px;display:flex;flex-direction:column;gap:14px}
 dialog h2{margin:0;font-size:16px}
 dialog label.f{display:flex;flex-direction:column;gap:4px;font-size:13px}
-dialog input[type=text],dialog select{padding:7px 9px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;font-family:inherit}
+/* iOS Safari は 16px 未満の入力欄にフォーカスすると自動でズームするので 16px 以上にする */
+dialog input[type=text],dialog select{padding:7px 9px;border:1px solid #cbd5e1;border-radius:6px;font-size:16px;font-family:inherit}
 dialog .hint{font-size:11px;color:var(--muted);line-height:1.5}
 dialog .hint a{color:var(--accent)}
 dialog .row{display:flex;flex-wrap:wrap;gap:10px;font-size:13px}
@@ -186,17 +188,48 @@ const CATS = {
 const CAT_ORDER = ['conbini','onsen','fastfood','cafe','restaurant','super']; // 判定の優先順
 const LS_KEY = 'eatOnGpx:settings';
 const CACHE_TTL = 7*24*3600*1000;
+const CACHE_PREFIX = 'eatOnGpx:cache:';
+
+/* ========== localStorage（iOS Safari では例外が飛ぶことがあるので必ず包む） ==========
+   ・プライベートブラウズや「すべてのCookieをブロック」では読み書きが例外になる
+   ・保存容量の上限がPCより小さく、検索キャッシュで QuotaExceededError になりやすい */
+const LS = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+  set(k,v){
+    try{ localStorage.setItem(k,v); return true; }
+    catch(e){
+      if(!evictCaches(k)) return false;                 // 古い検索キャッシュを捨てて1度だけ再挑戦
+      try{ localStorage.setItem(k,v); return true; }catch(e2){ return false; }
+    }
+  },
+};
+function evictCaches(keep){
+  let removed=false;
+  try{
+    for(const k of Object.keys(localStorage)){
+      if(k!==keep && k.startsWith(CACHE_PREFIX)){ localStorage.removeItem(k); removed=true; }
+    }
+  }catch(e){}
+  return removed;
+}
+/* iPhone / iPad（iPadOS は Macintosh を名乗るのでタッチ有無で判定） */
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
 
 const settings = loadSettings();
 function loadSettings(){
   const d = {key:'', mapId:'', source:'', corridor:300, cats:Object.fromEntries(Object.entries(CATS).map(([k,v])=>[k,v.on]))};
   try{
-    const saved = JSON.parse(localStorage.getItem(LS_KEY)||'{}');
+    const saved = JSON.parse(LS.get(LS_KEY)||'{}');
     Object.assign(d, saved, {cats:{...d.cats, ...(saved.cats||{})}});   // 後から増えた種類は既定値で補う
   }catch(e){}
   return d;
 }
-function saveSettings(){ localStorage.setItem(LS_KEY, JSON.stringify(settings)); }
+function saveSettings(){
+  // 保存できない＝プライベートブラウズや空き容量不足。直後の検索でステータス表示が消えてしまうので alert で知らせる
+  if(!LS.set(LS_KEY, JSON.stringify(settings)))
+    alert('設定をこのブラウザに保存できませんでした（プライベートブラウズや空き容量不足の可能性があります）。\n今回の表示には反映されますが、次に開いたときは元に戻ります。');
+}
 const effectiveSource = () => settings.source || (settings.key ? 'google' : 'osm');
 
 /* ========== DOM ========== */
@@ -299,6 +332,8 @@ async function initMap(){
       setStatus('Google Maps を読み込めなかったため OpenStreetMap の地図で表示します：'+e.message, true);
     }
   }
+  if(window.__leafletFailed || typeof L === 'undefined')
+    throw new Error('地図ライブラリ（Leaflet）を読み込めませんでした。通信状態を確かめて再読み込みしてください');
   mapApi = new LeafletMap(el); engine = 'leaflet';
 }
 
@@ -392,8 +427,8 @@ function classifyOsm(tags){
 }
 // 今月のPlaces API呼び出し回数（このブラウザ分）。無料枠の目安用
 const callsKey = ()=>'eatOnGpx:calls:'+new Date().toISOString().slice(0,7);
-const getCalls = ()=>parseInt(localStorage.getItem(callsKey())||'0',10);
-function countCall(){ try{ localStorage.setItem(callsKey(), String(getCalls()+1)); }catch(e){} }
+const getCalls = ()=>parseInt(LS.get(callsKey())||'0',10);
+function countCall(){ LS.set(callsKey(), String(getCalls()+1)); }
 async function searchGoogle(track, cats, corridor, onProgress){
   const {Place, SearchNearbyRankPreference} = await google.maps.importLibrary('places');
   const radius = Math.round(corridor*1.7);          // 円の重なりで幅±corridorを確実に覆う
@@ -425,27 +460,93 @@ async function searchGoogle(track, cats, corridor, onProgress){
   if(capped) console.info(`20件上限に達した地点: ${capped}/${samples.length}`);
   return [...found.values()];
 }
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+const OSM_CHUNK_KM  = 50;      // 1リクエストで扱うルート長の上限
+const OSM_CHUNK_PTS = 600;     // 1リクエストで送る座標数の上限
+const OSM_TIMEOUT   = 75000;   // 1リクエストの制限時間（モバイル回線は長い接続が切れやすい）
+const sleep = ms => new Promise(r=>setTimeout(r, ms));
+
+// 1リクエスト分のOverpass問い合わせ。タイムアウトしたら待ってミラーへ切り替えて最大4回試す
+async function overpassFetch(query){
+  let lastErr = null;
+  for(let attempt=0; attempt<4; attempt++){
+    if(cancelled) throw new Error('中止しました');
+    const url = OVERPASS_ENDPOINTS[attempt % OVERPASS_ENDPOINTS.length];
+    const ac = new AbortController();
+    const timer = setTimeout(()=>ac.abort(), OSM_TIMEOUT);   // AbortSignal.timeout は Safari 16 未満で使えない
+    try{
+      const res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(query),signal:ac.signal});
+      if(res.status===429 || res.status>=500) throw new Error(`Overpass API が混雑しています (${res.status})`);
+      if(!res.ok){ const fatal = new Error(`Overpass API エラー (${res.status})`); fatal.fatal = true; throw fatal; }
+      const text = await res.text();
+      try{ return JSON.parse(text); }
+      // 公衆Wi-Fiのログイン画面などが返ってくるとJSONにならない
+      catch(e){ throw new Error('サーバーから想定外の応答がありました。ネットワーク接続を確認してください'); }
+    }catch(e){
+      if(e.fatal) throw e;                       // 待っても変わらないものは即あきらめる
+      lastErr = (e.name==='AbortError')
+        ? new Error('通信がタイムアウトしました。電波の良い場所で「再検索」してください')
+        : e;
+      if(attempt<3) await sleep(1200*(attempt+1));
+    }finally{
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr;
+}
+
+// 問い合わせ用に座標を間引く（検索半径に対して十分細かければ結果は変わらない）。
+// GPSログそのままだと座標が数千個になり、1リクエストが重くなって回線の弱い場所で失敗しやすい
+function thinIndices(track, simp, minGap){
+  const {xy}=track, out=[]; let last=null;
+  for(const i of simp){
+    if(last===null || Math.hypot(xy[i].x-xy[last].x, xy[i].y-xy[last].y) >= minGap){ out.push(i); last=i; }
+  }
+  const end = simp[simp.length-1];
+  if(out[out.length-1] !== end) out.push(end);
+  return out;
+}
+
+// ルートを一定の長さ・点数で区切る（境界の点を重ねて隙間を作らない）
+function chunkTrack(track, simp){
+  const {cum}=track, out=[]; let cur=[];
+  for(const i of simp){
+    cur.push(i);
+    if(cur.length>=OSM_CHUNK_PTS || cum[i]-cum[cur[0]] >= OSM_CHUNK_KM*1000){ out.push(cur); cur=[i]; }
+  }
+  if(cur.length>1 || !out.length) out.push(cur);
+  return out;
+}
+
+function osmElementToPoi(el){
+  const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon; if(lat==null) return null;
+  const t = el.tags||{}; const cat = classifyOsm(t); if(!cat) return null;
+  const name = (t['name:ja'] || t.name || t.brand || t['brand:ja'] || (CATS[cat].label+'（名称未登録）')).replace(/;/g,'／');  // OSMの複数値は ; 区切り
+  const addr = t['addr:full'] || [t['addr:province'],t['addr:city'],t['addr:quarter'],t['addr:neighbourhood'],t['addr:block_number'],t['addr:housenumber']].filter(Boolean).join('');
+  return {id:el.type[0]+el.id,name,lat,lon,addr,cat,source:'osm',hours:t.opening_hours||''};
+}
+
 async function searchOsm(track, simp, cats, corridor, onProgress){
-  const coords = simp.map(i=>track.pts[i].lat.toFixed(5)+','+track.pts[i].lon.toFixed(5)).join(',');
   const byKey = {};
   for(const c of cats) for(const [k,vals] of Object.entries(CATS[c].osm)) (byKey[k] ||= []).push(...vals);
-  let q = '[out:json][timeout:120];(';
-  for(const [k,vals] of Object.entries(byKey)) q += `nwr(around:${corridor},${coords})[${k}~"^(${vals.join('|')})$"];`;
-  q += ');out center tags;';
-  onProgress(0,1);
-  const res = await fetch('https://overpass-api.de/api/interpreter',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(q)});
-  if(!res.ok) throw new Error(`Overpass API エラー (${res.status})。しばらく待って再検索してください`);
-  const json = await res.json();
-  onProgress(1,1);
-  const out=[];
-  for(const el of json.elements||[]){
-    const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon; if(lat==null) continue;
-    const t = el.tags||{}; const cat = classifyOsm(t); if(!cat) continue;
-    const name = (t['name:ja'] || t.name || t.brand || t['brand:ja'] || (CATS[cat].label+'（名称未登録）')).replace(/;/g,'／');  // OSMの複数値は ; 区切り
-    const addr = t['addr:full'] || [t['addr:province'],t['addr:city'],t['addr:quarter'],t['addr:neighbourhood'],t['addr:block_number'],t['addr:housenumber']].filter(Boolean).join('');
-    out.push({id:el.type[0]+el.id,name,lat,lon,addr,cat,source:'osm',hours:t.opening_hours||''});
+  const chunks = chunkTrack(track, thinIndices(track, simp, Math.max(30, corridor/4)));
+  const found = new Map();
+  onProgress(0, chunks.length);
+  for(let n=0; n<chunks.length; n++){
+    if(cancelled) break;
+    if(chunks.length>1) setStatus(`OpenStreetMap（Overpass）で検索中…（${n+1}/${chunks.length} 区間）`);
+    const coords = chunks[n].map(i=>track.pts[i].lat.toFixed(5)+','+track.pts[i].lon.toFixed(5)).join(',');
+    let q = '[out:json][timeout:60];(';
+    for(const [k,vals] of Object.entries(byKey)) q += `nwr(around:${corridor},${coords})[${k}~"^(${vals.join('|')})$"];`;
+    q += ');out center tags;';
+    const json = await overpassFetch(q);
+    for(const el of json.elements||[]){ const poi = osmElementToPoi(el); if(poi) found.set(poi.id, poi); }
+    onProgress(n+1, chunks.length);
   }
-  return out;
+  return [...found.values()];
 }
 
 /* ========== 状態 ========== */
@@ -481,7 +582,7 @@ function clearPois(){ markers.forEach(m=>m.remove()); markers=[]; pois=[]; elChi
 
 function cacheKey(src){
   const cats = Object.keys(CATS).filter(k=>settings.cats[k]).join(',');
-  return `eatOnGpx:cache:${route.name}|${Math.round(route.track.length)}|${src}|${settings.corridor}|${cats}`;
+  return `${CACHE_PREFIX}${route.name}|${Math.round(route.track.length)}|${src}|${settings.corridor}|${cats}`;
 }
 
 async function runSearch(force){
@@ -493,7 +594,7 @@ async function runSearch(force){
   const key = cacheKey(src);
   let raw=null;
   if(!force){
-    try{ const c=JSON.parse(localStorage.getItem(key)||'null'); if(c && Date.now()-c.t<CACHE_TTL) raw=c.pois; }catch(e){}
+    try{ const c=JSON.parse(LS.get(key)||'null'); if(c && Date.now()-c.t<CACHE_TTL) raw=c.pois; }catch(e){}
   }
   searching=true; cancelled=false; btnSearch.disabled=true;
   clearPois();
@@ -507,7 +608,7 @@ async function runSearch(force){
         ? await searchGoogle(route.track, cats, settings.corridor, setProgress)
         : await searchOsm(route.track, route.simp, cats, settings.corridor, setProgress);
       const lastCalls = getCalls()-before;
-      try{ localStorage.setItem(key, JSON.stringify({t:Date.now(), pois:raw})); }catch(e){}
+      LS.set(key, JSON.stringify({t:Date.now(), pois:raw}));
       setStatus(src==='google' ? `Google Places で ${raw.length} 件取得（API呼び出し ${lastCalls} 回・今月累計 ${getCalls()} 回）` : `OpenStreetMap で ${raw.length} 件取得`);
     }
     showPois(raw);
@@ -602,10 +703,12 @@ function exportGpx(){
        + `<desc>${esc(CATS[p.cat].label)}／${fmtKm(p.km)}km地点／ルートから${Math.round(p.dist)}m${p.hours?'／'+esc(p.hours):''}</desc><sym>${sym[p.cat]}</sym></wpt>\n`;
   }
   x += '</gpx>\n';
+  const url = URL.createObjectURL(new Blob([x],{type:'application/gpx+xml'}));
   const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([x],{type:'application/gpx+xml'}));
-  a.download=`${route.name}_spots.gpx`; a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  a.href=url; a.download=`${route.name}_spots.gpx`; a.rel='noopener';
+  document.body.appendChild(a);          // iOS Safari は文書に無いリンクのクリックを無視することがある
+  a.click();
+  setTimeout(()=>{ a.remove(); URL.revokeObjectURL(url); }, 30000);   // 保存シートが閉じるまでURLを残す
 }
 
 /* ========== 設定ダイアログ ========== */
@@ -641,9 +744,15 @@ $('#settingsForm').onsubmit=async e=>{
 /* ========== 入出力イベント ========== */
 async function handleFile(file){
   if(!file) return;
-  try{ await loadGpxText(await file.text(), file.name); }
-  catch(e){ console.error(e); setStatus('読み込みエラー：'+e.message, true); }
+  setStatus(`${file.name} を読み込み中…`);
+  try{
+    const text = await file.text();
+    if(!text.trim()) throw new Error('ファイルの中身が空でした。iCloud Drive のファイルは、先に端末にダウンロードしてから選んでください');
+    await loadGpxText(text, file.name);
+  }catch(e){ console.error(e); setStatus('読み込みエラー：'+e.message, true); }
 }
+// iOS の「ファイル」ピッカーは accept に知らない種類があると .gpx を選べなくする（灰色表示）ことがある
+if(IS_IOS) $('#gpxFile').removeAttribute('accept');
 $('#gpxFile').onchange=e=>{ handleFile(e.target.files[0]); e.target.value=''; };
 btnSearch.onclick=()=>runSearch(true);
 btnExport.onclick=exportGpx;
@@ -654,8 +763,19 @@ document.addEventListener('dragover',e=>e.preventDefault());
 document.addEventListener('drop',e=>{ e.preventDefault(); dragDepth=0; document.body.classList.remove('drag'); handleFile(e.dataTransfer.files[0]); });
 
 /* ========== 起動 ========== */
+window.addEventListener('error', e=>{ if(e.message) setStatus('エラーが発生しました：'+e.message, true); });
+window.addEventListener('unhandledrejection', e=>setStatus('エラーが発生しました：'+(e.reason?.message||e.reason), true));
+
 (async()=>{
-  await initMap();
+  if(matchMedia('(hover: none)').matches)   // ドラッグ&ドロップができない端末向けの案内
+    setStatus('上の「📂 GPXを開く」からGPXファイルを選んでください。');
+  try{
+    await initMap();
+  }catch(e){
+    console.error(e);
+    setStatus(e.message, true);
+    return;
+  }
   const u = new URLSearchParams(location.search).get('gpx');
   if(u){
     try{ const r=await fetch(u); if(!r.ok) throw new Error(r.status); await loadGpxText(await r.text(), decodeURIComponent(u.split('/').pop())); }
