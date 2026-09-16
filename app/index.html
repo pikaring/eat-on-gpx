@@ -470,13 +470,14 @@ const OSM_WORKERS  = 2;        // 同時に走らせる本数（公開サーバ�
 const OSM_SPLIT    = 4;        // サーバー側で完了しなかった区間を割る数
 const HOST_COOLDOWN = 45000;   // 429を返したサーバーはしばらく使わない
 const cooling = new Map();     // ホスト名 → 再開時刻
-const OSM_CHUNK_KM  = 50;      // 1リクエストで扱うルート長の上限
+const OSM_CHUNK_KM  = 25;      // 1リクエストで扱うルート長の上限
+const OSM_MAX_GAP  = 5000;     // 間引き後も5kmごとに点を残す（区間を切れるようにするため）
 const OSM_CHUNK_PTS = 600;     // 1リクエストで送る座標数の上限
 // サーバー側の実行時間上限（クエリの [timeout:]）は、こちらが切断するより必ず短くする。
 // 逆だと「まだ走っているクエリ」を切ることになり、サーバーはそのまま実行を続けて
 // スロットを占有するため、直後の再試行が同じIPで 429 になる
-const OSM_QUERY_TIMEOUT = 25;     // サーバー側の実行時間上限（秒）
-const OSM_TIMEOUT   = 35000;      // こちらが待つ上限（ミリ秒）。上より長くする
+const OSM_QUERY_TIMEOUT = 60;     // サーバー側の実行時間上限（秒）
+const OSM_TIMEOUT   = 70000;      // こちらが待つ上限（ミリ秒）。上より長くする
 const sleep = ms => new Promise(r=>setTimeout(r, ms));
 const inflight = new Set();    // 実行中のリクエスト（中止ボタンで全部止める）
 // iCloudプライベートリレー（設定 > Safari > IPアドレスを非公開）は共有IPになるため、
@@ -556,15 +557,32 @@ async function overpassFetch(query, startIdx, onRetry){
   throw lastErr;
 }
 
-// 問い合わせ用に座標を間引く（検索半径に対して十分細かければ結果は変わらない）。
-// GPSログそのままだと座標が数千個になり、1リクエストが重くなって回線の弱い場所で失敗しやすい
-function thinIndices(track, simp, minGap){
-  const {xy}=track, out=[]; let last=null;
-  for(const i of simp){
-    if(last===null || Math.hypot(xy[i].x-xy[last].x, xy[i].y-xy[last].y) >= minGap){ out.push(i); last=i; }
+// 問い合わせ用の座標を作る。Douglas-Peucker で間引くと元のルートからのずれは tol 以下に
+// 収まるので、検索半径を tol ぶん広げれば取りこぼしは出ない（最終的な距離の判定は
+// 元のトラックに対してブラウザ側で行うため、サーバーには「多めに取れれば十分」）。
+// 座標が数千個あると around の計算が重く、サーバー側の時間切れを招く
+function queryTrack(track, corridor){
+  const tol = Math.max(50, Math.round(corridor/2));
+  return {idx: densify(track, simplify(track.xy, tol), OSM_MAX_GAP), radius: corridor + tol};
+}
+
+// 間引いたあとでも「一定距離ごとに必ず点がある」ようにする。
+// まっすぐな道では点がごく少数になり、区間を25kmで切りたくても切れる場所が無く、
+// 1リクエストがルート全体を覆う巨大なクエリになってしまう
+function densify(track, idx, maxGap){
+  const {cum}=track, out=[];
+  for(let s=0;s<idx.length-1;s++){
+    const a=idx[s], b=idx[s+1];
+    out.push(a);
+    const span = cum[b]-cum[a];
+    if(span<=maxGap) continue;
+    const n = Math.ceil(span/maxGap);
+    let k=1, next=cum[a]+span/n;
+    for(let i=a+1;i<b && k<n;i++){
+      if(cum[i]>=next){ out.push(i); next=cum[a]+span/n*(++k); }
+    }
   }
-  const end = simp[simp.length-1];
-  if(out[out.length-1] !== end) out.push(end);
+  out.push(idx[idx.length-1]);
   return out;
 }
 
@@ -588,14 +606,19 @@ function osmElementToPoi(el){
 }
 
 async function searchOsm(track, simp, cats, corridor, onProgress){
-  const byKey = {};
-  for(const c of cats) for(const [k,vals] of Object.entries(CATS[c].osm)) (byKey[k] ||= []).push(...vals);
-  const chunks = chunkTrack(track, thinIndices(track, simp, Math.max(30, corridor/4)));
+  // [k~"^(a|b)$"] のような正規表現はタグの索引が使えず、around の範囲を全部読んでから
+  // 突き合わせることになって非常に重い。[k=v] の完全一致に分けると索引が効く
+  const tagFilters = [];
+  for(const c of cats) for(const [k,vals] of Object.entries(CATS[c].osm))
+    for(const v of vals) if(!tagFilters.some(t=>t[0]===k&&t[1]===v)) tagFilters.push([k,v]);
+
+  const q = queryTrack(track, corridor);
+  const chunks = chunkTrack(track, q.idx);
   const buildQuery = idx => {
     const coords = idx.map(i=>track.pts[i].lat.toFixed(5)+','+track.pts[i].lon.toFixed(5)).join(',');
-    let q = `[out:json][timeout:${OSM_QUERY_TIMEOUT}];(`;
-    for(const [k,vals] of Object.entries(byKey)) q += `nwr(around:${corridor},${coords})[${k}~"^(${vals.join('|')})$"];`;
-    return q + ');out center tags;';
+    let s = `[out:json][timeout:${OSM_QUERY_TIMEOUT}];(`;
+    for(const [k,v] of tagFilters) s += `nwr(around:${q.radius},${coords})[${k}=${v}];`;
+    return s + ');out center tags;';
   };
 
   const found = new Map();
