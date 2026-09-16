@@ -467,17 +467,36 @@ const OVERPASS_ENDPOINTS = [
   'https://overpass.private.coffee/api/interpreter',   // 予備（届かない場合は即エラーになり次へ回る）
 ];
 const OSM_WORKERS  = 2;        // 同時に走らせる本数（公開サーバーはIPあたり2本まで）
+const OSM_SPLIT    = 4;        // サーバー側で完了しなかった区間を割る数
 const HOST_COOLDOWN = 45000;   // 429を返したサーバーはしばらく使わない
 const cooling = new Map();     // ホスト名 → 再開時刻
 const OSM_CHUNK_KM  = 50;      // 1リクエストで扱うルート長の上限
 const OSM_CHUNK_PTS = 600;     // 1リクエストで送る座標数の上限
-const OSM_TIMEOUT   = 30000;   // 1リクエストの制限時間。公開サーバーはIP単位の順番待ちで
-                               // 何十秒も黙ることがあるので、長く待たずに別サーバーへ移る
+// サーバー側の実行時間上限（クエリの [timeout:]）は、こちらが切断するより必ず短くする。
+// 逆だと「まだ走っているクエリ」を切ることになり、サーバーはそのまま実行を続けて
+// スロットを占有するため、直後の再試行が同じIPで 429 になる
+const OSM_QUERY_TIMEOUT = 25;     // サーバー側の実行時間上限（秒）
+const OSM_TIMEOUT   = 35000;      // こちらが待つ上限（ミリ秒）。上より長くする
 const sleep = ms => new Promise(r=>setTimeout(r, ms));
 const inflight = new Set();    // 実行中のリクエスト（中止ボタンで全部止める）
 // iCloudプライベートリレー（設定 > Safari > IPアドレスを非公開）は共有IPになるため、
 // IP単位でスロットを配る Overpass では順番待ちに入りやすい
 const IOS_NET_HINT = 'iPhoneで「設定 → Safari → IPアドレスを非公開」がオンだと、共有IPのため Overpass の順番待ちに入りやすくなります。オフにするか、時間をおいて「🔍 再検索」してください。';
+
+// 失敗したときに「混雑なのか別の原因なのか」を切り分けるため、サーバーの空き状況を見る
+async function overpassSlots(){
+  try{
+    const ac = new AbortController(); const t = setTimeout(()=>ac.abort(), 8000);
+    const res = await fetch(OVERPASS_ENDPOINTS[0].replace(/\/interpreter$/, '/status'), {signal:ac.signal});
+    clearTimeout(t);
+    const text = await res.text();
+    const now = text.match(/(\d+) slots? available now/);
+    if(now) return `／サーバーの空きスロット ${now[1]}`;
+    const after = text.match(/in (\d+) seconds/);
+    if(after) return `／サーバーは順番待ち（あと約${after[1]}秒）`;
+  }catch(e){}
+  return '';
+}
 
 // 混雑中(429)のサーバーを避けてURLを選ぶ
 function pickEndpoint(idx){
@@ -508,15 +527,24 @@ async function overpassFetch(query, startIdx, onRetry){
       }
       if(!res.ok){ const fatal = new Error(`Overpass API エラー (${res.status})`); fatal.fatal = true; throw fatal; }
       const text = await res.text();
-      try{ return JSON.parse(text); }
+      let json;
       // 公衆Wi-Fiのログイン画面などが返ってくるとJSONにならない
+      try{ json = JSON.parse(text); }
       catch(e){ throw new Error('サーバーから想定外の応答がありました。ネットワーク接続を確認してください'); }
+      // Overpass は実行時エラー（時間切れ・メモリ超過）を HTTP 200 + remark で返す。
+      // 空の結果として素通りさせると、取りこぼしに気づけない
+      if(json.remark && /error|timed out|out of memory/i.test(json.remark)){
+        const heavy = new Error(`サーバー側でクエリが完了しませんでした（${json.remark.trim().slice(0,80)}）`);
+        heavy.heavy = true; throw heavy;
+      }
+      return json;
     }catch(e){
       if(cancelled) throw new Error('中止しました');
       if(e.fatal) throw e;                       // 待っても変わらないものは即あきらめる
       lastErr = e.name==='AbortError' ? new Error(`${OSM_TIMEOUT/1000}秒以内に応答がありませんでした（混雑または通信不良）`)
         : e instanceof TypeError ? new Error('ネットワークに接続できませんでした')   // 圏外・回線切断（Safariは "Load failed"）
         : e;
+      if(e.heavy) throw e;                       // 区間を分割して取り直すので、ここでは粘らない
       if(attempt<3){
         onRetry && onRetry(`${new URL(url).hostname} が${e.busy?'混雑している':'応答しない'}ため別のサーバーで再試行中`);
         await sleep((e.busy ? 6000 : 1200) * (attempt+1));   // 混雑時は長めに待つ
@@ -565,7 +593,7 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
   const chunks = chunkTrack(track, thinIndices(track, simp, Math.max(30, corridor/4)));
   const buildQuery = idx => {
     const coords = idx.map(i=>track.pts[i].lat.toFixed(5)+','+track.pts[i].lon.toFixed(5)).join(',');
-    let q = '[out:json][timeout:60];(';
+    let q = `[out:json][timeout:${OSM_QUERY_TIMEOUT}];(`;
     for(const [k,vals] of Object.entries(byKey)) q += `nwr(around:${corridor},${coords})[${k}~"^(${vals.join('|')})$"];`;
     return q + ');out center tags;';
   };
@@ -582,16 +610,18 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
   paint();                                   // 1秒待たずにすぐ出す
   const tick = setInterval(paint, 1000);
 
-  const fetchChunk = async (n, w, countProgress) => {
+  // part = {idx:座標インデックスの配列, id:元の区間番号}。失敗したら part を返す
+  const fetchPart = async (part, w, countProgress) => {
     try{
-      const json = await overpassFetch(buildQuery(chunks[n]), w, msg=>{ note = msg; });
+      const json = await overpassFetch(buildQuery(part.idx), w, msg=>{ note = msg; });
       for(const el of json.elements||[]){ const poi = osmElementToPoi(el); if(poi) found.set(poi.id, poi); }
       note = '';
-      return true;
+      return null;
     }catch(e){
       // 1区間の失敗で全部を捨てない。取れた区間はそのまま出して、欠けたことを伝える
-      if(!cancelled){ console.error(e); lastErr = e; }
-      return false;
+      if(cancelled) return null;
+      console.error(e); lastErr = e;
+      return {...part, heavy: !!e.heavy};
     }finally{
       if(countProgress) onProgress(++done, chunks.length);
     }
@@ -600,17 +630,30 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
   const runQueue = (queue, countProgress) => Promise.all(
     Array.from({length:Math.min(OSM_WORKERS, queue.length)}, async (_,w)=>{
       while(queue.length && !cancelled){
-        const n = queue.shift();
-        if(!await fetchChunk(n, w, countProgress)) failed.push(n);
+        const bad = await fetchPart(queue.shift(), w, countProgress);
+        if(bad) failed.push(bad);
       }
     }));
 
   try{
-    await runQueue(chunks.map((_,i)=>i), true);
-    // 混雑で落ちた区間は、ほかの区間が終わってから一度だけ取り直す（順番待ちが解けていることが多い）
-    if(!cancelled && failed.length && failed.length < chunks.length){
-      const again = failed.slice().sort((a,b)=>a-b); failed = [];
-      note = `混雑した ${again.length} 区間を取り直しています`;
+    await runQueue(chunks.map((idx,id)=>({idx,id})), true);
+    // 落ちた区間は、ほかの区間が終わってから一度だけ取り直す（順番待ちが解けていることが多い）。
+    // サーバー側で完了しなかった区間は、半分に割って軽くしてから投げ直す
+    // サーバー側で完了しなかった区間は分割すれば通ることが多いので、全区間が駄目でも取り直す
+    if(!cancelled && failed.length && (failed.length < chunks.length || failed.some(p=>p.heavy))){
+      const again = [];
+      for(const part of failed){
+        if(part.heavy && part.idx.length >= OSM_SPLIT*2){
+          // 負荷はほぼ「ルート長×半径」の面積で決まるので、長さを割って軽くする
+          const step = Math.ceil(part.idx.length/OSM_SPLIT);
+          for(let i=0;i<part.idx.length-1;i+=step)
+            again.push({idx:part.idx.slice(i, Math.min(i+step+1, part.idx.length)), id:part.id});
+        }else{
+          again.push({idx:part.idx, id:part.id});
+        }
+      }
+      failed = [];
+      note = `取得できなかった ${new Set(again.map(p=>p.id)).size} 区間を取り直しています`;
       await sleep(4000);
       await runQueue(again, false);
     }
@@ -622,9 +665,11 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
     searchWarning = '検索を中止しました（取得できた区間のみ表示しています）';
     return [...found.values()];
   }
-  if(chunks.length && failed.length===chunks.length) throw lastErr;   // 全滅したときだけエラー扱い
-  searchWarning = failed.length
-    ? `${chunks.length}区間のうち${failed.length}区間が取得できませんでした（${lastErr.message}）。「🔍 再検索」でやり直せます`
+  const lost = new Set(failed.map(p=>p.id));
+  if(chunks.length && lost.size===chunks.length) throw lastErr;   // 全滅したときだけエラー扱い
+  searchWarning = lost.size
+    ? `${chunks.length}区間のうち${lost.size}区間が取得できませんでした（${lastErr.message}）`
+      + await overpassSlots() + '。「🔍 再検索」でやり直せます'
     : '';
   return [...found.values()];
 }
@@ -700,7 +745,8 @@ async function runSearch(force){
     console.error(e);
     searchFailed = true;
     const netTrouble = /応答がありませんでした|接続できません|混雑/.test(e.message||'');
-    setStatus('検索に失敗しました：'+(e.message||e)+'（「🔍 再検索」でやり直せます）'
+    const slots = src==='google' ? '' : await overpassSlots();
+    setStatus('検索に失敗しました：'+(e.message||e)+slots+'（「🔍 再検索」でやり直せます）'
       + (netTrouble && IS_IOS ? '／'+IOS_NET_HINT : ''), true);
   }finally{
     searching=false; btnSearch.textContent='🔍 再検索'; btnSearch.disabled=false; setProgress(0,0);
