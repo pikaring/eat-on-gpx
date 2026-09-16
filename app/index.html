@@ -464,7 +464,11 @@ async function searchGoogle(track, cats, corridor, onProgress){
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',   // 予備（届かない場合は即エラーになり次へ回る）
 ];
+const OSM_WORKERS  = 2;        // 同時に走らせる本数（公開サーバーはIPあたり2本まで）
+const HOST_COOLDOWN = 45000;   // 429を返したサーバーはしばらく使わない
+const cooling = new Map();     // ホスト名 → 再開時刻
 const OSM_CHUNK_KM  = 50;      // 1リクエストで扱うルート長の上限
 const OSM_CHUNK_PTS = 600;     // 1リクエストで送る座標数の上限
 const OSM_TIMEOUT   = 30000;   // 1リクエストの制限時間。公開サーバーはIP単位の順番待ちで
@@ -475,19 +479,33 @@ const inflight = new Set();    // 実行中のリクエスト（中止ボタン�
 // IP単位でスロットを配る Overpass では順番待ちに入りやすい
 const IOS_NET_HINT = 'iPhoneで「設定 → Safari → IPアドレスを非公開」がオンだと、共有IPのため Overpass の順番待ちに入りやすくなります。オフにするか、時間をおいて「🔍 再検索」してください。';
 
+// 混雑中(429)のサーバーを避けてURLを選ぶ
+function pickEndpoint(idx){
+  const now = Date.now(), n = OVERPASS_ENDPOINTS.length;
+  for(let i=0;i<n;i++){
+    const url = OVERPASS_ENDPOINTS[(idx+i) % n];
+    if((cooling.get(new URL(url).hostname)||0) < now) return url;
+  }
+  return OVERPASS_ENDPOINTS[idx % n];
+}
+
 // 1リクエスト分のOverpass問い合わせ。startIdx のサーバーから始め、
 // 応答がなければ別サーバーに切り替えて最大4回試す
 async function overpassFetch(query, startIdx, onRetry){
   let lastErr = null;
   for(let attempt=0; attempt<4; attempt++){
     if(cancelled) throw new Error('中止しました');
-    const url = OVERPASS_ENDPOINTS[(startIdx+attempt) % OVERPASS_ENDPOINTS.length];
+    const url = pickEndpoint(startIdx + attempt);
     const ac = new AbortController();
     inflight.add(ac);
     const timer = setTimeout(()=>ac.abort(), OSM_TIMEOUT);   // AbortSignal.timeout は Safari 16 未満で使えない
     try{
       const res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(query),signal:ac.signal});
-      if(res.status===429 || res.status>=500) throw new Error(`Overpass API が混雑しています (${res.status})`);
+      if(res.status===429 || res.status>=500){
+        // 順番待ち。このサーバーはしばらく避けて、ほかのサーバーへ回す
+        cooling.set(new URL(url).hostname, Date.now()+HOST_COOLDOWN);
+        const busy = new Error(`Overpass API が混雑しています (${res.status})`); busy.busy = true; throw busy;
+      }
       if(!res.ok){ const fatal = new Error(`Overpass API エラー (${res.status})`); fatal.fatal = true; throw fatal; }
       const text = await res.text();
       try{ return JSON.parse(text); }
@@ -500,8 +518,8 @@ async function overpassFetch(query, startIdx, onRetry){
         : e instanceof TypeError ? new Error('ネットワークに接続できませんでした')   // 圏外・回線切断（Safariは "Load failed"）
         : e;
       if(attempt<3){
-        onRetry && onRetry(`${new URL(url).hostname} が応答しないため別のサーバーで再試行中`);
-        await sleep(1200*(attempt+1));
+        onRetry && onRetry(`${new URL(url).hostname} が${e.busy?'混雑している':'応答しない'}ため別のサーバーで再試行中`);
+        await sleep((e.busy ? 6000 : 1200) * (attempt+1));   // 混雑時は長めに待つ
       }
     }finally{
       clearTimeout(timer); inflight.delete(ac);
@@ -552,8 +570,8 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
     return q + ');out center tags;';
   };
 
-  const found = new Map(), failed = [];
-  let lastErr = null, done = 0, next = 0, note = '';
+  const found = new Map();
+  let failed = [], lastErr = null, done = 0, note = '';
   onProgress(0, chunks.length);
 
   // 進行中であることが分かるように経過秒を出す（1台が順番待ちで黙っても固まって見えない）
@@ -564,23 +582,38 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
   paint();                                   // 1秒待たずにすぐ出す
   const tick = setInterval(paint, 1000);
 
-  // 公開サーバーはIPあたり同時2本までなので、サーバー1台につき1本だけ走らせる
-  const worker = async w => {
-    while(next < chunks.length && !cancelled){
-      const n = next++;
-      try{
-        const json = await overpassFetch(buildQuery(chunks[n]), w, msg=>{ note = msg; });
-        for(const el of json.elements||[]){ const poi = osmElementToPoi(el); if(poi) found.set(poi.id, poi); }
-        note = '';
-      }catch(e){
-        // 1区間の失敗で全部を捨てない。取れた区間はそのまま出して、欠けたことを伝える
-        if(!cancelled){ console.error(e); failed.push(n+1); lastErr = e; }
-      }
-      onProgress(++done, chunks.length);
+  const fetchChunk = async (n, w, countProgress) => {
+    try{
+      const json = await overpassFetch(buildQuery(chunks[n]), w, msg=>{ note = msg; });
+      for(const el of json.elements||[]){ const poi = osmElementToPoi(el); if(poi) found.set(poi.id, poi); }
+      note = '';
+      return true;
+    }catch(e){
+      // 1区間の失敗で全部を捨てない。取れた区間はそのまま出して、欠けたことを伝える
+      if(!cancelled){ console.error(e); lastErr = e; }
+      return false;
+    }finally{
+      if(countProgress) onProgress(++done, chunks.length);
     }
   };
+  // サーバー1台につき1本だけ走らせる（公開サーバーはIPあたり同時2本まで）
+  const runQueue = (queue, countProgress) => Promise.all(
+    Array.from({length:Math.min(OSM_WORKERS, queue.length)}, async (_,w)=>{
+      while(queue.length && !cancelled){
+        const n = queue.shift();
+        if(!await fetchChunk(n, w, countProgress)) failed.push(n);
+      }
+    }));
+
   try{
-    await Promise.all(OVERPASS_ENDPOINTS.map((_,i)=>worker(i)));
+    await runQueue(chunks.map((_,i)=>i), true);
+    // 混雑で落ちた区間は、ほかの区間が終わってから一度だけ取り直す（順番待ちが解けていることが多い）
+    if(!cancelled && failed.length && failed.length < chunks.length){
+      const again = failed.slice().sort((a,b)=>a-b); failed = [];
+      note = `混雑した ${again.length} 区間を取り直しています`;
+      await sleep(4000);
+      await runQueue(again, false);
+    }
   }finally{
     clearInterval(tick);
   }
