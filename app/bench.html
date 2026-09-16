@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Overpass クエリ計測 - Eat on GPX</title>
+<link rel="icon" href="../assets/favicon.ico">
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;padding:16px;font-size:14px;line-height:1.6;color:#1f2933;background:#f3f4f6;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif;
+}
+h1{font-size:18px;margin:0 0 4px}
+p.lead{color:#6b7280;margin:0 0 16px}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:14px}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;margin-bottom:10px}
+select,input[type=text]{padding:7px 9px;border:1px solid #cbd5e1;border-radius:6px;font-size:16px;font-family:inherit}
+button{
+  padding:9px 16px;border-radius:6px;border:1px solid #1a73e8;background:#1a73e8;color:#fff;
+  font-size:15px;font-weight:700;cursor:pointer;
+}
+button.sub{background:#fff;color:#1a73e8}
+button:disabled{opacity:.5;cursor:default}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid #e5e7eb;padding:7px 6px;text-align:left;vertical-align:top}
+th{color:#6b7280;font-weight:600;white-space:nowrap}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ok{color:#15803d;font-weight:700}
+.ng{color:#b91c1c;font-weight:700}
+.note{font-size:12px;color:#6b7280}
+pre{background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:8px;font-size:11px;overflow:auto;max-height:160px}
+a{color:#1a73e8}
+</style>
+</head>
+<body>
+<h1>Overpass クエリ計測</h1>
+<p class="lead">同じ範囲を条件違いのクエリで順番に投げて、所要時間を比べます。
+どの書き方が速いかを実機で確かめるための道具です（<a href="./">ツール本体へ</a>）。</p>
+
+<div class="card">
+  <label class="f">GPX
+    <input type="file" id="file">
+    <span class="note">未選択なら付属のサンプル（札幌→苫小牧 74km）を使います。</span>
+  </label>
+  <label class="f">計測に使う区間の長さ
+    <select id="len">
+      <option value="10">10 km</option>
+      <option value="25" selected>25 km</option>
+      <option value="50">50 km</option>
+    </select>
+  </label>
+  <label class="f">サーバー
+    <select id="server">
+      <option value="https://overpass-api.de/api/interpreter">overpass-api.de</option>
+      <option value="https://overpass.kumi.systems/api/interpreter">overpass.kumi.systems</option>
+      <option value="https://overpass.private.coffee/api/interpreter">overpass.private.coffee</option>
+    </select>
+  </label>
+  <button id="run">計測する</button>
+  <button id="status" class="sub">サーバーの空き状況</button>
+  <div id="msg" class="note" style="margin-top:8px"></div>
+</div>
+
+<div class="card">
+  <table>
+    <thead><tr><th>条件</th><th class="num">座標数</th><th class="num">秒</th><th class="num">件数</th><th>結果</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="note" id="legend" style="margin-bottom:0">
+    「完全一致」は <code>[amenity=restaurant]</code> のように値を分けて書く方式、
+    「正規表現」は <code>[amenity~"^(restaurant|cafe)$"]</code> とまとめる方式です。
+    半径はルートを間引いた分（ずれの上限）を足した値です。
+  </p>
+</div>
+
+<div class="card">
+  <div class="note">最後に投げたクエリ</div>
+  <pre id="last">（まだありません）</pre>
+</div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const TAGS = [
+  ['shop','convenience'],['shop','supermarket'],['shop','chemist'],
+  ['amenity','restaurant'],['amenity','fast_food'],['amenity','cafe'],['amenity','public_bath'],
+];
+const REGEX = {shop:['convenience','supermarket','chemist'], amenity:['restaurant','fast_food','cafe','public_bath']};
+
+function parseGpx(text){
+  const doc = new DOMParser().parseFromString(text,'application/xml');
+  if(doc.querySelector('parsererror')) throw new Error('GPXの解析に失敗しました');
+  const num=(el,a)=>parseFloat(el.getAttribute(a));
+  let pts=[...doc.querySelectorAll('trkpt')].map(e=>({lat:num(e,'lat'),lon:num(e,'lon')}));
+  if(pts.length<2) pts=[...doc.querySelectorAll('rtept')].map(e=>({lat:num(e,'lat'),lon:num(e,'lon')}));
+  if(pts.length<2) throw new Error('トラックが見つかりません');
+  return pts;
+}
+function project(pts){
+  const R=6371000,d=Math.PI/180,k=Math.cos(pts[0].lat*d);
+  return pts.map(p=>({x:p.lon*d*R*k, y:p.lat*d*R}));
+}
+// 先頭から指定の長さぶんだけ切り出す
+function head(pts, xy, km){
+  let len=0;
+  for(let i=1;i<pts.length;i++){
+    len += Math.hypot(xy[i].x-xy[i-1].x, xy[i].y-xy[i-1].y);
+    if(len >= km*1000) return {pts:pts.slice(0,i+1), xy:xy.slice(0,i+1), len};
+  }
+  return {pts, xy, len};
+}
+// Douglas-Peucker（ツール本体と同じ）
+function simplify(xy, tol){
+  const keep=new Uint8Array(xy.length); keep[0]=keep[xy.length-1]=1;
+  const stack=[[0,xy.length-1]], t2=tol*tol;
+  while(stack.length){
+    const [a,b]=stack.pop(); if(b-a<2) continue;
+    const ax=xy[a].x, ay=xy[a].y, dx=xy[b].x-ax, dy=xy[b].y-ay, L2=dx*dx+dy*dy;
+    let best=-1, bi=-1;
+    for(let i=a+1;i<b;i++){
+      const px=xy[i].x-ax, py=xy[i].y-ay;
+      let d2;
+      if(L2===0) d2=px*px+py*py;
+      else{ const t=Math.max(0,Math.min(1,(px*dx+py*dy)/L2)); const ex=px-t*dx, ey=py-t*dy; d2=ex*ex+ey*ey; }
+      if(d2>best){best=d2;bi=i;}
+    }
+    if(best>t2){ keep[bi]=1; stack.push([a,bi],[bi,b]); }
+  }
+  const out=[]; for(let i=0;i<xy.length;i++) if(keep[i]) out.push(i);
+  return out;
+}
+const coordsOf = (pts, idx) => idx.map(i=>pts[i].lat.toFixed(5)+','+pts[i].lon.toFixed(5)).join(',');
+const qExact  = (coords, radius) => `[out:json][timeout:60];(`
+  + TAGS.map(([k,v])=>`nwr(around:${radius},${coords})[${k}=${v}];`).join('') + ');out center tags;';
+const qRegex  = (coords, radius) => `[out:json][timeout:60];(`
+  + Object.entries(REGEX).map(([k,vals])=>`nwr(around:${radius},${coords})[${k}~"^(${vals.join('|')})$"];`).join('')
+  + ');out center tags;';
+
+let gpxText = null;
+$('#file').onchange = async e => {
+  const f=e.target.files[0]; if(!f) return;
+  gpxText = await f.text(); $('#msg').textContent = `${f.name} を読み込みました`;
+};
+
+async function runOne(label, query, coordCount, url){
+  const tr=document.createElement('tr');
+  tr.innerHTML = `<td>${label}</td><td class="num">${coordCount}</td><td class="num">計測中…</td><td class="num">-</td><td>-</td>`;
+  $('#rows').appendChild(tr);
+  $('#last').textContent = query.length>4000 ? query.slice(0,4000)+'…' : query;
+  const t0=Date.now();
+  try{
+    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(query)});
+    const sec=((Date.now()-t0)/1000).toFixed(1);
+    const text=await res.text();
+    let json=null; try{ json=JSON.parse(text); }catch(e){}
+    const n = json && json.elements ? json.elements.length : 0;
+    const remark = json && json.remark ? json.remark.trim().slice(0,70) : '';
+    const okay = res.ok && json && !remark;
+    tr.innerHTML = `<td>${label}</td><td class="num">${coordCount}</td><td class="num">${sec}</td>`
+      + `<td class="num">${json?n:'-'}</td>`
+      + `<td class="${okay?'ok':'ng'}">${okay ? 'OK' : (remark || `HTTP ${res.status}` + (json?'':'／JSONではない応答'))}</td>`;
+  }catch(e){
+    const sec=((Date.now()-t0)/1000).toFixed(1);
+    tr.innerHTML = `<td>${label}</td><td class="num">${coordCount}</td><td class="num">${sec}</td><td class="num">-</td>`
+      + `<td class="ng">${e.name==='TypeError' ? '接続できませんでした' : e.message}</td>`;
+  }
+}
+
+$('#run').onclick = async () => {
+  $('#run').disabled = true; $('#rows').innerHTML=''; $('#msg').textContent='';
+  try{
+    if(!gpxText) gpxText = await (await fetch('samples/demo.gpx')).text();
+    const all = parseGpx(gpxText);
+    const seg = head(all, project(all), parseInt($('#len').value,10));
+    const url = $('#server').value;
+    $('#msg').textContent = `対象: 先頭 ${(seg.len/1000).toFixed(1)} km（元の点数 ${seg.pts.length}）`;
+
+    // ツール本体の現行設定＝完全一致・DP150m・半径450m
+    const i150 = simplify(seg.xy, 150), i75 = simplify(seg.xy, 75), i15 = simplify(seg.xy, 15);
+    const runs = [
+      ['完全一致・間引き150m・半径450m', qExact(coordsOf(seg.pts,i150),450), i150.length],
+      ['正規表現・間引き150m・半径450m', qRegex(coordsOf(seg.pts,i150),450), i150.length],
+      ['完全一致・間引き75m・半径300m',  qExact(coordsOf(seg.pts,i75),300),  i75.length],
+      ['正規表現・間引き15m・半径300m（旧）', qRegex(coordsOf(seg.pts,i15),300), i15.length],
+    ];
+    for(const [label,q,n] of runs){ await runOne(label,q,n,url); await new Promise(r=>setTimeout(r,2000)); }
+  }catch(e){
+    $('#msg').textContent = 'エラー: '+e.message;
+  }finally{
+    $('#run').disabled = false;
+  }
+};
+
+$('#status').onclick = async () => {
+  $('#msg').textContent = '確認中…';
+  try{
+    const res = await fetch($('#server').value.replace(/\/interpreter$/,'/status'));
+    const t = await res.text();
+    const now = t.match(/(\d+) slots? available now/);
+    const after = t.match(/in (\d+) seconds/);
+    $('#msg').textContent = now ? `空きスロット: ${now[1]}` : after ? `順番待ち: あと約${after[1]}秒` : t.slice(0,120);
+  }catch(e){ $('#msg').textContent = '状況を取得できませんでした（'+e.message+'）'; }
+};
+</script>
+</body>
+</html>
