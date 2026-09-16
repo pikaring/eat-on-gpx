@@ -467,16 +467,23 @@ const OVERPASS_ENDPOINTS = [
 ];
 const OSM_CHUNK_KM  = 50;      // 1リクエストで扱うルート長の上限
 const OSM_CHUNK_PTS = 600;     // 1リクエストで送る座標数の上限
-const OSM_TIMEOUT   = 75000;   // 1リクエストの制限時間（モバイル回線は長い接続が切れやすい）
+const OSM_TIMEOUT   = 30000;   // 1リクエストの制限時間。公開サーバーはIP単位の順番待ちで
+                               // 何十秒も黙ることがあるので、長く待たずに別サーバーへ移る
 const sleep = ms => new Promise(r=>setTimeout(r, ms));
+const inflight = new Set();    // 実行中のリクエスト（中止ボタンで全部止める）
+// iCloudプライベートリレー（設定 > Safari > IPアドレスを非公開）は共有IPになるため、
+// IP単位でスロットを配る Overpass では順番待ちに入りやすい
+const IOS_NET_HINT = 'iPhoneで「設定 → Safari → IPアドレスを非公開」がオンだと、共有IPのため Overpass の順番待ちに入りやすくなります。オフにするか、時間をおいて「🔍 再検索」してください。';
 
-// 1リクエスト分のOverpass問い合わせ。タイムアウトしたら待ってミラーへ切り替えて最大4回試す
-async function overpassFetch(query){
+// 1リクエスト分のOverpass問い合わせ。startIdx のサーバーから始め、
+// 応答がなければ別サーバーに切り替えて最大4回試す
+async function overpassFetch(query, startIdx, onRetry){
   let lastErr = null;
   for(let attempt=0; attempt<4; attempt++){
     if(cancelled) throw new Error('中止しました');
-    const url = OVERPASS_ENDPOINTS[attempt % OVERPASS_ENDPOINTS.length];
+    const url = OVERPASS_ENDPOINTS[(startIdx+attempt) % OVERPASS_ENDPOINTS.length];
     const ac = new AbortController();
+    inflight.add(ac);
     const timer = setTimeout(()=>ac.abort(), OSM_TIMEOUT);   // AbortSignal.timeout は Safari 16 未満で使えない
     try{
       const res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(query),signal:ac.signal});
@@ -487,13 +494,17 @@ async function overpassFetch(query){
       // 公衆Wi-Fiのログイン画面などが返ってくるとJSONにならない
       catch(e){ throw new Error('サーバーから想定外の応答がありました。ネットワーク接続を確認してください'); }
     }catch(e){
+      if(cancelled) throw new Error('中止しました');
       if(e.fatal) throw e;                       // 待っても変わらないものは即あきらめる
-      lastErr = e.name==='AbortError' ? new Error('通信がタイムアウトしました。電波の良い場所で「再検索」してください')
+      lastErr = e.name==='AbortError' ? new Error(`${OSM_TIMEOUT/1000}秒以内に応答がありませんでした（混雑または通信不良）`)
         : e instanceof TypeError ? new Error('ネットワークに接続できませんでした')   // 圏外・回線切断（Safariは "Load failed"）
         : e;
-      if(attempt<3) await sleep(1200*(attempt+1));
+      if(attempt<3){
+        onRetry && onRetry(`${new URL(url).hostname} が応答しないため別のサーバーで再試行中`);
+        await sleep(1200*(attempt+1));
+      }
     }finally{
-      clearTimeout(timer);
+      clearTimeout(timer); inflight.delete(ac);
     }
   }
   throw lastErr;
@@ -534,24 +545,49 @@ async function searchOsm(track, simp, cats, corridor, onProgress){
   const byKey = {};
   for(const c of cats) for(const [k,vals] of Object.entries(CATS[c].osm)) (byKey[k] ||= []).push(...vals);
   const chunks = chunkTrack(track, thinIndices(track, simp, Math.max(30, corridor/4)));
-  const found = new Map();
-  const failed = []; let lastErr = null;
-  onProgress(0, chunks.length);
-  for(let n=0; n<chunks.length; n++){
-    if(cancelled) break;
-    if(chunks.length>1) setStatus(`OpenStreetMap（Overpass）で検索中…（${n+1}/${chunks.length} 区間）`);
-    const coords = chunks[n].map(i=>track.pts[i].lat.toFixed(5)+','+track.pts[i].lon.toFixed(5)).join(',');
+  const buildQuery = idx => {
+    const coords = idx.map(i=>track.pts[i].lat.toFixed(5)+','+track.pts[i].lon.toFixed(5)).join(',');
     let q = '[out:json][timeout:60];(';
     for(const [k,vals] of Object.entries(byKey)) q += `nwr(around:${corridor},${coords})[${k}~"^(${vals.join('|')})$"];`;
-    q += ');out center tags;';
-    try{
-      const json = await overpassFetch(q);
-      for(const el of json.elements||[]){ const poi = osmElementToPoi(el); if(poi) found.set(poi.id, poi); }
-    }catch(e){
-      // 1区間の失敗で全部を捨てない。取れた区間はそのまま出して、欠けたことを伝える
-      console.error(e); failed.push(n+1); lastErr = e;
+    return q + ');out center tags;';
+  };
+
+  const found = new Map(), failed = [];
+  let lastErr = null, done = 0, next = 0, note = '';
+  onProgress(0, chunks.length);
+
+  // 進行中であることが分かるように経過秒を出す（1台が順番待ちで黙っても固まって見えない）
+  const t0 = Date.now();
+  const paint = ()=>setStatus(
+    `OpenStreetMap（Overpass）で検索中…（${done}/${chunks.length} 区間・${Math.round((Date.now()-t0)/1000)} 秒）`
+    + (note ? `／${note}` : ''));
+  paint();                                   // 1秒待たずにすぐ出す
+  const tick = setInterval(paint, 1000);
+
+  // 公開サーバーはIPあたり同時2本までなので、サーバー1台につき1本だけ走らせる
+  const worker = async w => {
+    while(next < chunks.length && !cancelled){
+      const n = next++;
+      try{
+        const json = await overpassFetch(buildQuery(chunks[n]), w, msg=>{ note = msg; });
+        for(const el of json.elements||[]){ const poi = osmElementToPoi(el); if(poi) found.set(poi.id, poi); }
+        note = '';
+      }catch(e){
+        // 1区間の失敗で全部を捨てない。取れた区間はそのまま出して、欠けたことを伝える
+        if(!cancelled){ console.error(e); failed.push(n+1); lastErr = e; }
+      }
+      onProgress(++done, chunks.length);
     }
-    onProgress(n+1, chunks.length);
+  };
+  try{
+    await Promise.all(OVERPASS_ENDPOINTS.map((_,i)=>worker(i)));
+  }finally{
+    clearInterval(tick);
+  }
+
+  if(cancelled){
+    searchWarning = '検索を中止しました（取得できた区間のみ表示しています）';
+    return [...found.values()];
   }
   if(chunks.length && failed.length===chunks.length) throw lastErr;   // 全滅したときだけエラー扱い
   searchWarning = failed.length
@@ -609,13 +645,14 @@ async function runSearch(force){
   if(!force){
     try{ const c=JSON.parse(LS.get(key)||'null'); if(c && Date.now()-c.t<CACHE_TTL) raw=c.pois; }catch(e){}
   }
-  searching=true; cancelled=false; searchWarning=''; searchFailed=false; btnSearch.disabled=true;
+  searching=true; cancelled=false; searchWarning=''; searchFailed=false;
+  btnSearch.textContent='✕ 中止'; btnSearch.disabled=false;     // 待たされたときに抜け出せるように
   clearPois();
   try{
     if(raw){
       setStatus('前回の検索結果（キャッシュ）を表示しています。最新にするには「再検索」。');
     }else{
-      setStatus(src==='google' ? 'Google Places で検索中…' : 'OpenStreetMap（Overpass）で検索中…（数十秒かかることがあります）');
+      setStatus(src==='google' ? 'Google Places で検索中…' : 'OpenStreetMap（Overpass）で検索中…');
       const before = getCalls();
       raw = src==='google'
         ? await searchGoogle(route.track, cats, settings.corridor, setProgress)
@@ -629,9 +666,11 @@ async function runSearch(force){
   }catch(e){
     console.error(e);
     searchFailed = true;
-    setStatus('検索に失敗しました：'+(e.message||e)+'（「🔍 再検索」でやり直せます）', true);
+    const netTrouble = /応答がありませんでした|接続できません|混雑/.test(e.message||'');
+    setStatus('検索に失敗しました：'+(e.message||e)+'（「🔍 再検索」でやり直せます）'
+      + (netTrouble && IS_IOS ? '／'+IOS_NET_HINT : ''), true);
   }finally{
-    searching=false; btnSearch.disabled=false; setProgress(0,0);
+    searching=false; btnSearch.textContent='🔍 再検索'; btnSearch.disabled=false; setProgress(0,0);
   }
 }
 
@@ -769,7 +808,10 @@ async function handleFile(file){
 // iOS の「ファイル」ピッカーは accept に知らない種類があると .gpx を選べなくする（灰色表示）ことがある
 if(IS_IOS) $('#gpxFile').removeAttribute('accept');
 $('#gpxFile').onchange=e=>{ handleFile(e.target.files[0]); e.target.value=''; };
-btnSearch.onclick=()=>runSearch(true);
+btnSearch.onclick=()=>{
+  if(searching){ cancelled=true; inflight.forEach(ac=>ac.abort()); setStatus('検索を中止しています…'); }
+  else runSearch(true);
+};
 btnExport.onclick=exportGpx;
 let dragDepth=0;
 document.addEventListener('dragenter',e=>{ e.preventDefault(); if(++dragDepth===1) document.body.classList.add('drag'); });
